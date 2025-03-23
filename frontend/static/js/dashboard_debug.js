@@ -170,7 +170,7 @@ function debug_displaySlaves(slaves) {
         card.className = 'col-lg-6 mb-4';
         
         const lastSync = slave.last_sync ? new Date(slave.last_sync).toLocaleString() : 'Nie';
-        const statusBadge = (slave.status === 'active' || slave.is_online) ? 
+        const statusBadge = slave.status === 'active' ? 
             '<span class="badge bg-success">Aktiv</span>' : 
             '<span class="badge bg-danger">Inaktiv</span>';
         

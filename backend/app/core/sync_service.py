@@ -315,7 +315,8 @@ class SyncService:
                     
                     # Verarbeite den Batch
                     slave = self.slave_config.get_slave(slave_id)
-                    if slave and slave.is_online:
+                    # Prüfe, ob der Slave online ist (Dictionary-Zugriff)
+                    if slave and slave.get("status") == "active":
                         self._process_change_batch(slave, change_batch)
                     
                     self.change_queue.task_done()
