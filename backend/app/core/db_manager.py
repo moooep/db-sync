@@ -16,24 +16,46 @@ class DatabaseManager:
     Verwaltet Zugriff und Operationen auf SQLite-Datenbanken.
     """
     
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, check_same_thread: bool = True):
         """
         Initialisiert den DatabaseManager.
         
         Args:
             db_path: Pfad zur SQLite-Datenbank
+            check_same_thread: Ob SQLite Thread-Sicherheitsprüfungen durchführen soll
         """
         self.db_path = db_path
-        self._validate_db_path()
+        self.check_same_thread = check_same_thread
         
-    def _validate_db_path(self) -> None:
-        """Überprüft, ob der Datenbankpfad gültig ist."""
-        if not self.db_path:
-            raise ValueError("Datenbankpfad darf nicht leer sein")
+        # Stelle sicher, dass das Verzeichnis existiert
+        if not os.path.exists(os.path.dirname(db_path)):
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            logger.info(f"Verzeichnis für Datenbank erstellt: {os.path.dirname(db_path)}")
         
-        if not os.path.exists(os.path.dirname(self.db_path)):
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-            
+        # Stelle sicher, dass die Datenbank existiert oder erstelle sie
+        if not os.path.exists(db_path):
+            self._create_empty_db()
+            logger.info(f"Neue leere Datenbank erstellt: {db_path}")
+        
+    def _create_empty_db(self):
+        """Erstellt eine leere Datenbank-Datei."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                # Erstelle eine leere Datenbank mit SQLite-Standardkonfiguration
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("PRAGMA journal_mode = WAL")
+                
+                # Eine leere Tabelle, die wir später nicht verwenden, nur um zu bestätigen, dass die DB erstellt wurde
+                conn.execute("CREATE TABLE IF NOT EXISTS _db_info (key TEXT PRIMARY KEY, value TEXT)")
+                conn.execute(
+                    "INSERT OR REPLACE INTO _db_info (key, value) VALUES (?, ?)",
+                    ("creation_date", "CREATE_DATE_PLACEHOLDER")
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Fehler beim Erstellen der leeren Datenbank: {e}")
+            raise
+        
     @contextmanager
     def get_connection(self) -> sqlite3.Connection:
         """
@@ -44,7 +66,7 @@ class DatabaseManager:
         """
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, check_same_thread=self.check_same_thread)
             # Aktiviere Foreign-Key-Constraints
             conn.execute("PRAGMA foreign_keys = ON")
             # Konfiguriere für WAL-Modus

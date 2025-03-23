@@ -122,7 +122,17 @@ def run_app(config_path=None, host=WEB_HOST, port=WEB_PORT, debug=DEBUG):
     else:
         logger.warning("SyncService nicht verfügbar, Synchronisations-Threads werden nicht gestartet")
     
-    app.run(host=host, port=port, debug=debug)
+    # Verwende Eventlet für den WebSocket-Server
+    try:
+        import eventlet
+        eventlet.monkey_patch()
+        logger.info(f"Starte Server mit Eventlet auf {host}:{port}")
+        from eventlet import wsgi
+        wsgi.server(eventlet.listen((host, port)), app)
+    except ImportError:
+        logger.warning("Eventlet nicht installiert. WebSocket-Funktionalität wird eingeschränkt sein.")
+        logger.info(f"Starte Server im Flask-Standardmodus auf {host}:{port}")
+        app.run(host=host, port=port, debug=debug)
 
 if __name__ == '__main__':
     run_app() 
