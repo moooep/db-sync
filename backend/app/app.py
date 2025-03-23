@@ -52,12 +52,18 @@ def create_app(test_config=None):
     # Initialisiere SyncService
     try:
         if MASTER_DB_PATH:
+            logger.info(f"Initialisiere SyncService mit Master-DB: {MASTER_DB_PATH}")
             sync_service = SyncService(MASTER_DB_PATH)
             app.sync_service = sync_service
+            logger.info("SyncService erfolgreich initialisiert")
         else:
             logger.warning("MASTER_DB_PATH nicht konfiguriert, SyncService wird nicht initialisiert")
+            # Erstelle einen Dummy-SyncService, um Fehler zu vermeiden
+            app.sync_service = None
     except Exception as e:
         logger.error(f"Fehler bei der Initialisierung des SyncService: {e}", exc_info=True)
+        # Erstelle einen Dummy-SyncService, um Fehler zu vermeiden
+        app.sync_service = None
     
     # Registriere Blueprints
     app.register_blueprint(api_bp)
@@ -101,15 +107,20 @@ def create_app(test_config=None):
     
     return app
 
-def run_app(config_path=None, host="0.0.0.0", port=5002, debug=False):
+def run_app(config_path=None, host=WEB_HOST, port=WEB_PORT, debug=DEBUG):
     """Flask-Anwendung ausführen."""
     app = create_app(config_path)
     
     # Starte Synchronisations-Thread, wenn vorhanden
-    if hasattr(app, 'sync_service'):
-        app.sync_service.start_sync_thread()
-        app.sync_service.start_realtime_sync()
-        logger.info("Echtzeit-Synchronisation aktiviert")
+    if hasattr(app, 'sync_service') and app.sync_service is not None:
+        try:
+            app.sync_service.start_sync_thread()
+            app.sync_service.start_realtime_sync()
+            logger.info("Echtzeit-Synchronisation aktiviert")
+        except Exception as e:
+            logger.error(f"Fehler beim Starten der Synchronisations-Threads: {e}", exc_info=True)
+    else:
+        logger.warning("SyncService nicht verfügbar, Synchronisations-Threads werden nicht gestartet")
     
     app.run(host=host, port=port, debug=debug)
 

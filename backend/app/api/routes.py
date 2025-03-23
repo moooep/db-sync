@@ -417,6 +417,14 @@ def start_realtime_sync():
         # Debug-Ausgabe für weitere Informationen
         current_app.logger.debug("API: start_realtime_sync aufgerufen")
         
+        # Prüfe, ob sync_service verfügbar ist
+        if current_app.sync_service is None:
+            current_app.logger.warning("API: sync_service ist nicht initialisiert")
+            return jsonify({
+                'status': 'error',
+                'message': 'Synchronisierungsservice nicht verfügbar'
+            })
+            
         # Prüfe, ob die Echtzeit-Synchronisation bereits läuft
         status = current_app.sync_service.get_realtime_status()
         if status['active']:
@@ -456,6 +464,14 @@ def start_realtime_sync():
 def stop_realtime_sync():
     """Stoppt die Echtzeit-Synchronisation."""
     try:
+        # Prüfe, ob sync_service verfügbar ist
+        if current_app.sync_service is None:
+            current_app.logger.warning("API: sync_service ist nicht initialisiert")
+            return jsonify({
+                'status': 'success',
+                'message': 'Synchronisierungsservice ist nicht aktiv'
+            })
+            
         result = current_app.sync_service.stop_realtime_sync()
         if result:
             return jsonify({
@@ -478,6 +494,14 @@ def stop_realtime_sync():
 def get_realtime_sync_status():
     """Gibt den Status der Echtzeit-Synchronisation zurück."""
     try:
+        if current_app.sync_service is None:
+            current_app.logger.warning("API: sync_service ist nicht initialisiert")
+            return jsonify({
+                'status': 'success',
+                'realtime_sync_active': False,
+                'queue_size': 0
+            })
+        
         status = current_app.sync_service.get_realtime_status()
         return jsonify({
             'status': 'success',
@@ -486,7 +510,10 @@ def get_realtime_sync_status():
         })
     except Exception as e:
         current_app.logger.error(f"Fehler beim Abrufen des Echtzeit-Synchronisationsstatus: {e}")
+        # Gebe einen Standardstatus zurück, um Frontend-Fehler zu vermeiden
         return jsonify({
-            'status': 'error',
-            'message': str(e)
+            'status': 'success', 
+            'realtime_sync_active': False,
+            'queue_size': 0,
+            'error': str(e)
         })
