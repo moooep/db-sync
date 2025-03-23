@@ -43,6 +43,7 @@ DEBUG = os.environ.get('DEBUG') or config.getboolean('server', 'debug', fallback
 # Synchronisierungseinstellungen
 SYNC_INTERVAL = int(os.environ.get('SYNC_INTERVAL') or config.get('sync', 'check_interval', fallback='60'))
 IGNORED_TABLES = os.environ.get('IGNORED_TABLES', '').split(',') if os.environ.get('IGNORED_TABLES') else []
+CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE') or config.get('sync', 'max_chunk_size', fallback='10485760'))  # 10MB in Bytes
 
 # Logging-Einstellungen
 LOG_LEVEL = os.environ.get('LOG_LEVEL') or config.get('logging', 'level', fallback='INFO')
