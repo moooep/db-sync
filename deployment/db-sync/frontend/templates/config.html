@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Konfiguration - SQLite Datenbanksynchronisierung</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/"><i class="bi bi-database-fill-gear"></i> SQLite Sync</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/config"><i class="bi bi-gear-fill"></i> Konfiguration</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/logs"><i class="bi bi-list-ul"></i> Logs</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container content-wrapper">
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-database"></i> Master-Datenbank Konfiguration</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="masterConfigForm">
+                            <div class="mb-3">
+                                <label for="masterDbPath" class="form-label">Pfad zur Master-Datenbank</label>
+                                <input type="text" class="form-control" id="masterDbPath" required>
+                                <div class="form-text">Der vollständige Pfad zur SQLite-Datenbank, die als Master verwendet wird.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="syncInterval" class="form-label">Synchronisationsintervall (Sekunden)</label>
+                                <input type="number" class="form-control" id="syncInterval" min="10" value="60" required>
+                                <div class="form-text">Zeitintervall zwischen den automatischen Synchronisationsläufen.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="maxSyncThreads" class="form-label">Maximale Anzahl an Synchronisations-Threads</label>
+                                <input type="number" class="form-control" id="maxSyncThreads" min="1" max="10" value="3" required>
+                                <div class="form-text">Wie viele Slave-Datenbanken können gleichzeitig synchronisiert werden.</div>
+                            </div>
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="autoStartSync" checked>
+                                <label class="form-check-label" for="autoStartSync">Synchronisationsdienst automatisch starten</label>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Konfiguration speichern</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-wrench-adjustable"></i> Erweiterte Einstellungen</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="advancedConfigForm">
+                            <div class="mb-3">
+                                <label for="logLevel" class="form-label">Log-Level</label>
+                                <select class="form-select" id="logLevel" required>
+                                    <option value="DEBUG">Debug</option>
+                                    <option value="INFO" selected>Info</option>
+                                    <option value="WARNING">Warning</option>
+                                    <option value="ERROR">Error</option>
+                                </select>
+                                <div class="form-text">Bestimmt die Detailtiefe der Protokollierung.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="logRetention" class="form-label">Log-Aufbewahrung (Tage)</label>
+                                <input type="number" class="form-control" id="logRetention" min="1" value="30" required>
+                                <div class="form-text">Wie lange Logs aufbewahrt werden, bevor sie automatisch gelöscht werden.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="tempDir" class="form-label">Temporäres Verzeichnis</label>
+                                <input type="text" class="form-control" id="tempDir">
+                                <div class="form-text">Pfad zum temporären Verzeichnis für die Synchronisationsdateien.</div>
+                            </div>
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="enableChangeDetection" checked>
+                                <label class="form-check-label" for="enableChangeDetection">Änderungserkennung aktivieren</label>
+                                <div class="form-text">Verwendet Trigger, um Änderungen in der Master-Datenbank zu erkennen, was die Synchronisation beschleunigt.</div>
+                            </div>
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="validateAfterSync">
+                                <label class="form-check-label" for="validateAfterSync">Nach Synchronisation validieren</label>
+                                <div class="form-text">Führt nach jeder Synchronisation eine Integritätsprüfung der Slave-Datenbank durch.</div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-table"></i> Globale Tabellen-Ausschlüsse</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="tableExclusionsForm">
+                            <div class="mb-3">
+                                <label for="globalExcludedTables" class="form-label">Globale ausgeschlossene Tabellen</label>
+                                <textarea class="form-control" id="globalExcludedTables" rows="3" placeholder="Eine Tabelle pro Zeile eingeben"></textarea>
+                                <div class="form-text">Tabellen, die für alle Slave-Datenbanken von der Synchronisation ausgeschlossen werden sollen.</div>
+                            </div>
+                            <button type="button" id="loadSystemTablesBtn" class="btn btn-outline-secondary mb-3">System-Tabellen anzeigen</button>
+                            <div id="systemTablesContainer" class="d-none mb-3">
+                                <div class="tables-container" id="systemTables">
+                                    <p>Wird geladen...</p>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Ausschlüsse speichern</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4 mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center bg-light">
+                        <h5 class="mb-0"><i class="bi bi-tools"></i> Datenbank-Verwaltung</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="d-grid gap-2">
+                                    <button type="button" id="optimizeDbBtn" class="btn btn-outline-primary mb-2">
+                                        <i class="bi bi-speedometer"></i> Datenbanken optimieren
+                                    </button>
+                                    <div class="form-text mb-3">Führt VACUUM und andere Optimierungen auf allen Datenbanken durch.</div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="d-grid gap-2">
+                                    <button type="button" id="checkIntegrityBtn" class="btn btn-outline-info mb-2">
+                                        <i class="bi bi-shield-check"></i> Integrität prüfen
+                                    </button>
+                                    <div class="form-text mb-3">Überprüft die Integrität der Master- und aller Slave-Datenbanken.</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-md-6">
+                                <div class="d-grid gap-2">
+                                    <button type="button" id="resetLogDbBtn" class="btn btn-outline-warning mb-2">
+                                        <i class="bi bi-trash"></i> Log-Datenbank zurücksetzen
+                                    </button>
+                                    <div class="form-text mb-3">Löscht alle Logs aus der Datenbank (nicht wiederherstellbar).</div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="d-grid gap-2">
+                                    <button type="button" id="forceFullSyncBtn" class="btn btn-outline-danger mb-2">
+                                        <i class="bi bi-arrow-repeat"></i> Vollständige Neusynchronisation erzwingen
+                                    </button>
+                                    <div class="form-text mb-3">Erzwingt eine vollständige Neusynchronisation aller Slaves.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/js/config.js"></script>
+</body>
+</html> 

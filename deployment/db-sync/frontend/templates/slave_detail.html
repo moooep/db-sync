@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slave-Details - SQLite Datenbanksynchronisierung</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/"><i class="bi bi-database-fill-gear"></i> SQLite Sync</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/config"><i class="bi bi-gear-fill"></i> Konfiguration</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/logs"><i class="bi bi-list-ul"></i> Logs</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb">
+                        <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+                        <li class="breadcrumb-item active" aria-current="page">Slave-Details</li>
+                    </ol>
+                </nav>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 id="slaveTitle"><i class="bi bi-hdd-network"></i> Slave wird geladen...</h5>
+                        <div>
+                            <button id="editSlaveBtn" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#editSlaveModal">
+                                <i class="bi bi-pencil"></i> Bearbeiten
+                            </button>
+                            <button id="refreshBtn" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-arrow-clockwise"></i> Aktualisieren
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info" id="slaveLoadingAlert" role="alert">
+                            Slave-Informationen werden geladen...
+                        </div>
+                        <div id="slaveDetails" class="d-none">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h6 class="border-bottom pb-2 mb-3">Allgemeine Informationen</h6>
+                                    <div class="mb-3 row">
+                                        <label class="col-sm-4 fw-bold">Name:</label>
+                                        <div class="col-sm-8" id="slaveName"></div>
+                                    </div>
+                                    <div class="mb-3 row">
+                                        <label class="col-sm-4 fw-bold">Datenbank-Pfad:</label>
+                                        <div class="col-sm-8" id="slaveDbPath"></div>
+                                    </div>
+                                    <div class="mb-3 row">
+                                        <label class="col-sm-4 fw-bold">Server-Adresse:</label>
+                                        <div class="col-sm-8" id="slaveServerAddress"></div>
+                                    </div>
+                                    <div class="mb-3 row">
+                                        <label class="col-sm-4 fw-bold">Status:</label>
+                                        <div class="col-sm-8" id="slaveStatus"></div>
+                                    </div>
+                                    <div class="mb-3 row">
+                                        <label class="col-sm-4 fw-bold">Letzte Synchronisation:</label>
+                                        <div class="col-sm-8" id="slaveLastSync"></div>
+                                    </div>
+                                    <div class="mb-3 row">
+                                        <label class="col-sm-4 fw-bold">Erstellt am:</label>
+                                        <div class="col-sm-8" id="slaveCreatedAt"></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="border-bottom pb-2 mb-3">Ignorierte Tabellen</h6>
+                                    <div id="slaveIgnoredTables" class="mb-4">
+                                        <p>Keine Tabellen ignoriert</p>
+                                    </div>
+                                    
+                                    <h6 class="border-bottom pb-2 mb-3">Aktionen</h6>
+                                    <div class="d-grid gap-2">
+                                        <button id="syncSlaveBtn" class="btn btn-primary mb-2">
+                                            <i class="bi bi-arrow-repeat"></i> Jetzt synchronisieren
+                                        </button>
+                                        <button id="initialSyncBtn" class="btn btn-outline-primary mb-2">
+                                            <i class="bi bi-lightning-charge"></i> Vollständige Synchronisation
+                                        </button>
+                                        <button id="checkIntegrityBtn" class="btn btn-outline-info mb-2">
+                                            <i class="bi bi-shield-check"></i> Integrität prüfen
+                                        </button>
+                                        <button id="deleteSlaveBtn" class="btn btn-outline-danger mb-2">
+                                            <i class="bi bi-trash"></i> Slave löschen
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="row mt-4">
+                                <div class="col-md-12">
+                                    <h6 class="border-bottom pb-2 mb-3">Letzte Synchronisationslogs</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-striped table-hover">
+                                            <thead>
+                                                <tr>
+                                                    <th>Zeitpunkt</th>
+                                                    <th>Status</th>
+                                                    <th>Nachricht</th>
+                                                    <th>Änderungen</th>
+                                                    <th>Dauer (s)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="syncLogsTableBody">
+                                                <tr>
+                                                    <td colspan="5" class="text-center">Logs werden geladen...</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="text-end">
+                                        <a href="/logs" class="btn btn-sm btn-outline-secondary mt-2">
+                                            <i class="bi bi-list-ul"></i> Alle Logs anzeigen
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal zum Bearbeiten eines Slaves -->
+    <div class="modal fade" id="editSlaveModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-pencil-square"></i> Slave bearbeiten</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editSlaveForm">
+                        <div class="mb-3">
+                            <label for="editSlaveName" class="form-label">Name</label>
+                            <input type="text" class="form-control" id="editSlaveName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editDbPath" class="form-label">Datenbank-Pfad</label>
+                            <input type="text" class="form-control" id="editDbPath" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editServerAddress" class="form-label">Server-Adresse (optional)</label>
+                            <input type="text" class="form-control" id="editServerAddress">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editStatus" class="form-label">Status</label>
+                            <select class="form-select" id="editStatus" required>
+                                <option value="active">Aktiv</option>
+                                <option value="inactive">Inaktiv</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editIgnoredTables" class="form-label">Ignorierte Tabellen (durch Komma getrennt)</label>
+                            <input type="text" class="form-control" id="editIgnoredTables">
+                            <div class="mt-2">
+                                <button type="button" id="loadTablesBtn" class="btn btn-sm btn-outline-secondary">Verfügbare Tabellen laden</button>
+                            </div>
+                            <div id="availableTablesContainer" class="mt-2 d-none">
+                                <label>Verfügbare Tabellen:</label>
+                                <div id="availableTables" class="border p-2 overflow-auto" style="max-height: 150px;">
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                    <button type="button" id="saveSlaveBtn" class="btn btn-primary">Speichern</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal für Integritätsprüfung-Ergebnisse -->
+    <div class="modal fade" id="integrityResultsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Integritätsprüfung</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="integrityResults">
+                        <p>Ergebnisse werden geladen...</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/js/slave_detail.js"></script>
+    <script>
+        // Slave-ID aus der URL holen
+        const slaveId = {{ slave_id }};
+    </script>
+</body>
+</html> 

@@ -1,0 +1,8 @@
+flask==2.3.3
+flask-socketio==5.3.4
+python-dotenv==1.0.0
+eventlet==0.33.3
+pytest==7.4.0
+pytest-flask==1.2.0
+SQLAlchemy==2.0.20
+Werkzeug==2.3.7 

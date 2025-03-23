@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logs - SQLite Datenbanksynchronisierung</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/"><i class="bi bi-database-fill-gear"></i> SQLite Sync</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/"><i class="bi bi-speedometer2"></i> Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/config"><i class="bi bi-gear-fill"></i> Konfiguration</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/logs"><i class="bi bi-list-ul"></i> Logs</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5><i class="bi bi-journal-text"></i> Synchronisations-Logs</h5>
+                        <div>
+                            <button id="refreshLogsBtn" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-arrow-clockwise"></i> Aktualisieren
+                            </button>
+                            <button id="clearLogsBtn" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i> Logs leeren
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label for="slaveFilter" class="form-label">Slave-Filter</label>
+                                    <select id="slaveFilter" class="form-select">
+                                        <option value="all">Alle Slaves</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label for="statusFilter" class="form-label">Status-Filter</label>
+                                    <select id="statusFilter" class="form-select">
+                                        <option value="all">Alle Status</option>
+                                        <option value="success">Erfolg</option>
+                                        <option value="error">Fehler</option>
+                                        <option value="warning">Warnung</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label for="dateFilter" class="form-label">Datum-Filter</label>
+                                    <select id="dateFilter" class="form-select">
+                                        <option value="all">Alle Daten</option>
+                                        <option value="today">Heute</option>
+                                        <option value="yesterday">Gestern</option>
+                                        <option value="last7days">Letzte 7 Tage</option>
+                                        <option value="last30days">Letzte 30 Tage</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <label for="limitFilter" class="form-label">Anzahl</label>
+                                    <select id="limitFilter" class="form-select">
+                                        <option value="100">100</option>
+                                        <option value="250">250</option>
+                                        <option value="500">500</option>
+                                        <option value="1000">1000</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Zeitpunkt</th>
+                                        <th>Slave</th>
+                                        <th>Status</th>
+                                        <th>Nachricht</th>
+                                        <th>Änderungen</th>
+                                        <th>Dauer (s)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="logsTableBody">
+                                    <tr>
+                                        <td colspan="6" class="text-center">Logs werden geladen...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between align-items-center mt-3">
+                            <div class="text-muted">
+                                <span id="logsCount">0</span> Log-Einträge gefunden
+                            </div>
+                            <nav aria-label="Page navigation">
+                                <ul class="pagination pagination-sm" id="logsPagination">
+                                </ul>
+                            </nav>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal für Log-Details -->
+    <div class="modal fade" id="logDetailsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Log-Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <h6>Slave</h6>
+                        <p id="logDetailSlave" class="mb-3"></p>
+                        
+                        <h6>Zeitpunkt</h6>
+                        <p id="logDetailTimestamp" class="mb-3"></p>
+                        
+                        <h6>Status</h6>
+                        <p id="logDetailStatus" class="mb-3"></p>
+                        
+                        <h6>Nachricht</h6>
+                        <pre id="logDetailMessage" class="bg-light p-3 rounded mb-3"></pre>
+                        
+                        <h6>Änderungen</h6>
+                        <p id="logDetailChanges" class="mb-3"></p>
+                        
+                        <h6>Dauer</h6>
+                        <p id="logDetailDuration" class="mb-3"></p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Schließen</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="/static/js/logs.js"></script>
+</body>
+</html> 

@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# SQLite
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+*.log
+
+# Temporäre Dateien
+temp/
+.DS_Store
+
+# IDE-spezifische Dateien
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# Umgebungsvariablen
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Distribution/Packaging
+deployment/db-sync.tar.gz 

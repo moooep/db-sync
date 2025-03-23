@@ -1,0 +1,122 @@
+INSTALLATIONSANLEITUNG FÜR DB-SYNC
+===================================
+
+DB-Sync ist eine Anwendung zur Synchronisation von SQLite-Datenbanken. Mit dieser Anleitung
+können Sie die Anwendung auf Ihrem Linux-Server installieren.
+
+SYSTEMVORAUSSETZUNGEN
+--------------------
+- Linux-Server (Ubuntu/Debian oder CentOS/RHEL)
+- Python 3.8 oder höher
+- sudo-Rechte für die Installation des Systemdienstes
+
+INSTALLATION
+-----------
+
+1. AUTOMATISCHE INSTALLATION (EMPFOHLEN)
+----------------------------------------
+
+   a) Übertragen Sie die Datei "db-sync.tar.gz" auf Ihren Server, z.B. mit SCP:
+      scp db-sync.tar.gz benutzer@server:/tmp/
+
+   b) Verbinden Sie sich mit Ihrem Server:
+      ssh benutzer@server
+
+   c) Entpacken Sie das Archiv:
+      mkdir -p /opt/db-sync
+      tar -xzf /tmp/db-sync.tar.gz -C /opt/
+      cd /opt/db-sync
+
+   d) Führen Sie das Installationsskript aus:
+      chmod +x install.sh
+      ./install.sh
+
+   Das Skript führt alle notwendigen Schritte durch, einschließlich:
+   - Installation der erforderlichen Abhängigkeiten
+   - Einrichtung der Python-Umgebung
+   - Konfiguration der Anwendung
+   - Einrichtung und Start des Systemdienstes
+
+   Nach erfolgreicher Installation ist die Anwendung unter http://server-ip:5002 erreichbar.
+
+2. MANUELLE INSTALLATION
+------------------------
+
+   Falls die automatische Installation nicht funktioniert, können Sie folgende Schritte manuell ausführen:
+
+   a) Python und erforderliche Pakete installieren:
+      
+      Für Ubuntu/Debian:
+      sudo apt-get update
+      sudo apt-get install -y python3 python3-pip python3-venv
+
+      Für CentOS/RHEL:
+      sudo yum install -y python3 python3-pip
+
+   b) Entpacken Sie das Archiv (falls noch nicht geschehen):
+      mkdir -p /opt/db-sync
+      tar -xzf db-sync.tar.gz -C /opt/
+      cd /opt/db-sync
+
+   c) Virtuelle Umgebung erstellen und aktivieren:
+      python3 -m venv venv
+      source venv/bin/activate
+
+   d) Abhängigkeiten installieren:
+      pip install -r requirements.txt
+
+   e) .env-Datei anpassen:
+      Öffnen Sie die Datei .env mit einem Texteditor und passen Sie den Pfad zur Master-Datenbank an:
+      nano .env
+      
+      Ändern Sie die Zeile:
+      MASTER_DB_PATH=/opt/db-sync/data/master.db
+
+   f) Anwendung starten:
+      python run.py
+
+KONFIGURATION
+------------
+Die wichtigsten Konfigurationseinstellungen finden Sie in der .env-Datei:
+
+- MASTER_DB_PATH: Pfad zur Master-Datenbank
+- WEB_PORT: Port für die Weboberfläche (Standard: 5002)
+- SYNC_INTERVAL: Synchronisationsintervall in Sekunden
+- LOG_LEVEL: Protokollierungsstufe (DEBUG, INFO, WARNING, ERROR)
+
+VERWALTUNG DES SYSTEMDIENSTES
+----------------------------
+Bei automatischer Installation wurde ein Systemdienst eingerichtet.
+Dieser kann mit folgenden Befehlen verwaltet werden:
+
+- Status überprüfen:
+  sudo systemctl status db-sync.service
+
+- Dienst neu starten:
+  sudo systemctl restart db-sync.service
+
+- Dienst stoppen:
+  sudo systemctl stop db-sync.service
+
+- Logs anzeigen:
+  sudo journalctl -u db-sync.service -f
+
+FEHLERBEHEBUNG
+-------------
+Bei Problemen:
+
+1. Überprüfen Sie die Systemdienst-Logs:
+   sudo journalctl -u db-sync.service -f
+
+2. Überprüfen Sie die Anwendungslogs im Verzeichnis logs/
+
+3. Stellen Sie sicher, dass der Pfad zur Master-Datenbank in der .env-Datei korrekt ist
+
+4. Prüfen Sie Netzwerkverbindung und Firewall-Einstellungen für Port 5002
+
+Bei weiteren Fragen konsultieren Sie bitte die README.md-Datei oder wenden Sie sich
+an den Support.
+
+====================================
+Vielen Dank für die Verwendung von DB-Sync!
+==================================== 
