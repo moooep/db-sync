@@ -121,8 +121,18 @@ class SlaveConfig:
             
         Returns:
             int: ID des neuen Slaves
+            
+        Raises:
+            ValueError: Wenn ein Fehler auftritt, z.B. wenn der Name bereits verwendet wird
         """
-        # Zuerst überprüfen, ob die Slave-Datenbank alle notwendigen Tabellen und Spalten hat
+        # Prüfe zuerst, ob bereits ein Slave mit diesem Namen existiert
+        with self.db_manager.get_connection() as conn:
+            existing_slave = conn.execute("SELECT id FROM slaves WHERE name = ?", (name,)).fetchone()
+            if existing_slave:
+                logger.warning(f"Ein Slave mit dem Namen '{name}' existiert bereits.")
+                raise ValueError(f"Ein Slave mit dem Namen '{name}' existiert bereits. Bitte wählen Sie einen anderen Namen.")
+
+        # Überprüfe, ob die Slave-Datenbank alle notwendigen Tabellen und Spalten hat
         try:
             self._prepare_slave_database(db_path)
         except Exception as e:
@@ -142,7 +152,15 @@ class SlaveConfig:
                 )
                 logger.info(f"Slave {name} erfolgreich zur Konfiguration hinzugefügt.")
                 return result.lastrowid
+            except sqlite3.IntegrityError as e:
+                if "UNIQUE constraint failed: slaves.name" in str(e):
+                    logger.error(f"Ein Slave mit dem Namen '{name}' existiert bereits.")
+                    raise ValueError(f"Ein Slave mit dem Namen '{name}' existiert bereits. Bitte wählen Sie einen anderen Namen.")
+                else:
+                    logger.error(f"Datenbankfehler beim Hinzufügen des Slaves: {e}")
+                    raise ValueError(f"Fehler beim Hinzufügen des Slaves: {e}")
             except Exception as e:
+                logger.error(f"Fehler beim Hinzufügen des Slaves: {e}")
                 raise ValueError(f"Fehler beim Hinzufügen des Slaves: {e}")
     
     def _prepare_slave_database(self, db_path: str) -> None:
