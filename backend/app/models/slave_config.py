@@ -5,25 +5,40 @@ Modell für die Konfiguration von Slave-Datenbanken.
 import os
 import json
 import sqlite3
+import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from backend.app.core.db_manager import DatabaseManager
-from backend.config.config import CONFIG_DB_PATH
+from backend.config.config import MASTER_DB_PATH
+
+# Logger einrichten
+logger = logging.getLogger(__name__)
 
 class SlaveConfig:
     """
     Klasse zur Verwaltung der Konfiguration von Slave-Datenbanken.
     """
     
-    def __init__(self, config_db_path: str = CONFIG_DB_PATH):
+    def __init__(self, config_db_path: Optional[str] = None):
         """
         Initialisiert die SlaveConfig-Klasse.
         
         Args:
             config_db_path: Pfad zur Konfigurations-Datenbank
         """
-        self.db_manager = DatabaseManager(config_db_path)
+        if config_db_path is None:
+            # Standard-Konfigurationspfad ist im selben Verzeichnis wie die Master-DB
+            master_dir = os.path.dirname(MASTER_DB_PATH)
+            self.config_db_path = os.path.join(master_dir, 'config.db')
+        else:
+            self.config_db_path = config_db_path
+            
+        # Stelle sicher, dass das Verzeichnis existiert
+        os.makedirs(os.path.dirname(self.config_db_path), exist_ok=True)
+        
+        # Verbindung zur Datenbank
+        self.db_manager = DatabaseManager(self.config_db_path)
         self._create_config_tables()
     
     def _create_config_tables(self) -> None:
@@ -201,18 +216,17 @@ class SlaveConfig:
             List[Dict[str, Any]]: Liste aller Slave-Konfigurationen
         """
         with sqlite3.connect(self.db_manager.db_path) as conn:
-            # Aktiviere Row-Factory, um die Ergebnisse als Dict zu erhalten
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM slaves ORDER BY name")
-            slave_rows = cursor.fetchall()
+            slaves_rows = cursor.fetchall()
             
-            # Konvertiere SQLite-Rows in echte Python-Dictionaries
+            # Konvertiere die Sqlite3.Row-Objekte in Dictionaries
             slaves = []
-            for row in slave_rows:
-                slave = dict(row)
+            for slave_row in slaves_rows:
+                slave = dict(slave_row)
                 
-                # Wenn die ignorierte Tabellen als String gespeichert wurden, konvertiere sie in eine Liste
+                # Ignorierte Tabellen als kommaseparierte Zeichenkette
                 if 'ignored_tables' in slave and slave['ignored_tables']:
                     slave['ignored_tables'] = slave['ignored_tables'].split(',')
                 else:
