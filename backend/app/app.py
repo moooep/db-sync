@@ -146,13 +146,30 @@ def run_app():
     
     if eventlet_available:
         try:
-            # Verwende bind_socket - stabiler als listen
-            logger.info(f"Erstelle Socket auf {host}:{port}")
-            sock = eventlet.listen((host, port))
-            logger.info(f"Socket erstellt, starte wsgi-Server")
-            # Mehr Logs vor dem Start
-            logger.info(f"WSGI-Server-Start mit app: {app}")
-            eventlet.wsgi.server(sock, app, log_output=True)
+            # Explizit Socket erstellen und konfigurieren
+            sock = None
+            try:
+                import socket
+                # Diese Optionen können helfen, das "Address already in use"-Problem zu vermeiden
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((host, port))
+                sock.listen(128)  # Backlog für verbindende Clients
+                logger.info(f"Socket erfolgreich konfiguriert und gebunden an {host}:{port}")
+            except socket.error as socket_err:
+                logger.error(f"Socket-Fehler: {socket_err}")
+                raise
+                
+            if sock:
+                # Verwende den explizit erstellten Socket
+                logger.info(f"WSGI-Server-Start mit explizitem Socket und app: {app}")
+                # Debug-Option für zusätzliche Ausgaben
+                eventlet.wsgi.server(sock, app, log_output=True, debug=debug)
+            else:
+                # Fallback, wenn Socket-Erstellung fehlschlug
+                logger.warning("Fallback auf Eventlet listen()")
+                sock = eventlet.listen((host, port))
+                eventlet.wsgi.server(sock, app, log_output=True)
         except Exception as e:
             logger.error(f"Fehler beim Starten des Eventlet-Servers: {e}", exc_info=True)
             # Fallback auf Flask im Fehlerfall
