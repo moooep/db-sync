@@ -107,32 +107,41 @@ def create_app(test_config=None):
     
     return app
 
-def run_app(config_path=None, host=WEB_HOST, port=WEB_PORT, debug=DEBUG):
-    """Flask-Anwendung ausführen."""
-    app = create_app(config_path)
+def run_app():
+    """Führt die Anwendung aus."""
+    # Überprüfe, ob Eventlet bereits geladen ist, anstatt es erneut zu patchen
+    eventlet_available = False
+    try:
+        import eventlet
+        eventlet_available = True
+        logger.info("Eventlet wurde bereits geladen und gepacht")
+    except ImportError:
+        logger.warning("Eventlet nicht installiert oder nicht verfügbar")
+
+    app = create_app()
     
-    # Starte Synchronisations-Thread, wenn vorhanden
+    # Starte den Sync-Thread, wenn ein sync_service existiert
     if hasattr(app, 'sync_service') and app.sync_service is not None:
         try:
             app.sync_service.start_sync_thread()
             app.sync_service.start_realtime_sync()
-            logger.info("Echtzeit-Synchronisation aktiviert")
+            logger.info("Synchronisations-Threads und Echtzeit-Synchronisation aktiviert")
         except Exception as e:
             logger.error(f"Fehler beim Starten der Synchronisations-Threads: {e}", exc_info=True)
     else:
         logger.warning("SyncService nicht verfügbar, Synchronisations-Threads werden nicht gestartet")
+        
+    # Starte den Server
+    host = os.environ.get('FLASK_HOST', WEB_HOST)
+    port = int(os.environ.get('FLASK_PORT', WEB_PORT))
+    debug = os.environ.get('FLASK_DEBUG', str(DEBUG)).lower() == 'true'
     
-    # Verwende Eventlet für den WebSocket-Server
-    try:
-        import eventlet
-        eventlet.monkey_patch()
-        logger.info(f"Starte Server mit Eventlet auf {host}:{port}")
-        from eventlet import wsgi
-        wsgi.server(eventlet.listen((host, port)), app)
-    except ImportError:
-        logger.warning("Eventlet nicht installiert. WebSocket-Funktionalität wird eingeschränkt sein.")
-        logger.info(f"Starte Server im Flask-Standardmodus auf {host}:{port}")
-        app.run(host=host, port=port, debug=debug)
+    if eventlet_available:
+        logger.info(f"Starte Server mit Eventlet auf {host}:{port} (Debug: {debug})")
+        eventlet.wsgi.server(eventlet.listen((host, port)), app)
+    else:
+        logger.info(f"Starte Server mit Flask auf {host}:{port} (Debug: {debug})")
+        app.run(host=host, port=port, debug=debug, use_reloader=False)
 
 if __name__ == '__main__':
     run_app() 

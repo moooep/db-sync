@@ -169,11 +169,18 @@ class SyncService:
             master_db.setup_change_tracking()
             
             # Starte den Hauptthread für die Echtzeit-Synchronisation
-            self.realtime_thread = threading.Thread(
-                target=self._realtime_sync_thread,
-                daemon=True
-            )
-            self.realtime_thread.start()
+            # Verwende spawn anstelle von threading.Thread, wenn Eventlet verfügbar ist
+            try:
+                import eventlet
+                logger.info("Verwende Eventlet-Greenthread für die Echtzeit-Synchronisation")
+                self.realtime_thread = eventlet.spawn(self._realtime_sync_thread)
+            except (ImportError, AttributeError):
+                logger.info("Fallback auf Standard-Threading für die Echtzeit-Synchronisation")
+                self.realtime_thread = threading.Thread(
+                    target=self._realtime_sync_thread,
+                    daemon=True
+                )
+                self.realtime_thread.start()
             
             self.realtime_active = True
             logger.info("Echtzeit-Synchronisationsthread gestartet")
@@ -289,12 +296,20 @@ class SyncService:
         if slave_id in self.slave_workers and self.slave_workers[slave_id].is_alive():
             return
         
-        worker = threading.Thread(
-            target=self._slave_sync_worker,
-            args=(slave_id,),
-            daemon=True
-        )
-        worker.start()
+        # Verwende spawn anstelle von threading.Thread, wenn Eventlet verfügbar ist
+        try:
+            import eventlet
+            logger.debug(f"Verwende Eventlet-Greenthread für Slave {slave_id}")
+            worker = eventlet.spawn(self._slave_sync_worker, slave_id)
+        except (ImportError, AttributeError):
+            logger.debug(f"Fallback auf Standard-Threading für Slave {slave_id}")
+            worker = threading.Thread(
+                target=self._slave_sync_worker,
+                args=(slave_id,),
+                daemon=True
+            )
+            worker.start()
+            
         self.slave_workers[slave_id] = worker
         logger.debug(f"Worker-Thread für Slave {slave_id} gestartet")
     
@@ -860,8 +875,17 @@ class SyncService:
             return
         
         self.stop_event.clear()
-        self.sync_thread = threading.Thread(target=self._sync_thread_func, daemon=True)
-        self.sync_thread.start()
+        
+        # Verwende spawn anstelle von threading.Thread, wenn Eventlet verfügbar ist
+        try:
+            import eventlet
+            logger.info("Verwende Eventlet-Greenthread für den Synchronisations-Thread")
+            self.sync_thread = eventlet.spawn(self._sync_thread_func)
+        except (ImportError, AttributeError):
+            logger.info("Fallback auf Standard-Threading für den Synchronisations-Thread")
+            self.sync_thread = threading.Thread(target=self._sync_thread_func, daemon=True)
+            self.sync_thread.start()
+            
         logger.info("Synchronisations-Thread gestartet")
     
     def stop_sync_thread(self) -> None:
