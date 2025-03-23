@@ -349,6 +349,9 @@ class DatabaseManager:
         """
         try:
             cursor = conn.cursor()
+            # Deaktiviere die Row-Factory temporär für diesen Cursor
+            cursor.row_factory = None
+            
             # Prüfe, ob die Tabelle existiert
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='_sync_tracking'")
             if not cursor.fetchone():
@@ -358,7 +361,7 @@ class DatabaseManager:
             # Prüfe, welche Spalten vorhanden sind
             cursor.execute("PRAGMA table_info(_sync_tracking)")
             columns = cursor.fetchall()
-            column_names = [col[1] for col in columns]
+            column_names = [col[1] for col in columns]  # Jetzt ist col ein Tuple, kein Dict
             
             # Überprüfe fehlende Spalten und füge sie hinzu
             missing_columns = []
