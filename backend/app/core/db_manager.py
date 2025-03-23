@@ -193,45 +193,73 @@ class DatabaseManager:
             conn.execute(schema)
     
     def setup_change_tracking(self) -> None:
-        """
-        Richtet das Change-Tracking-System in der Datenbank ein.
-        Erstellt eine Tabelle zur Verfolgung von Änderungen und Trigger für INSERT, UPDATE, DELETE.
-        """
-        # Erstelle Change-Tracking-Tabelle mit erweitertem Schema
-        tracking_table_schema = """
-        CREATE TABLE IF NOT EXISTS _sync_tracking (
-            id INTEGER PRIMARY KEY,
-            table_name TEXT NOT NULL,
-            row_id INTEGER NOT NULL,
-            operation TEXT NOT NULL,
-            changed_columns TEXT,
-            old_values TEXT,
-            new_values TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-        
+        """Richtet Tracking-Tabelle und Trigger für Änderungen ein."""
         with self.get_connection() as conn:
-            conn.execute(tracking_table_schema)
+            # Erstelle Tracking-Tabelle
+            conn.execute('''
+            CREATE TABLE IF NOT EXISTS _sync_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_name TEXT NOT NULL,
+                row_id INTEGER NOT NULL,
+                operation TEXT NOT NULL,
+                changed_columns TEXT,
+                old_values TEXT,
+                new_values TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
             
-            # Hole alle Tabellen außer System- und Tracking-Tabellen
+            # Erstelle Index
+            conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_sync_tracking_timestamp
+            ON _sync_tracking (timestamp)
+            ''')
+            
+            # Erstelle Tabelle für verarbeitete Änderungen
+            conn.execute('''
+            CREATE TABLE IF NOT EXISTS _sync_processed_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                change_id INTEGER NOT NULL,
+                processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+            
+            # Hole alle Tabellen außer den Systemtabellen
             tables = self.get_all_tables()
-            tables = [t for t in tables if not t.startswith('sqlite_') and not t.startswith('_sync')]
+            system_tables = ['_sync_tracking', '_sync_processed_changes', 'sqlite_sequence', '_db_info']
             
-            # Erstelle Trigger für jede Tabelle
             for table_name in tables:
-                # Hole Spalten für diese Tabelle
-                columns = self.get_table_columns(table_name)
-                column_list = ", ".join(columns)
+                if table_name.startswith('sqlite_') or table_name in system_tables:
+                    continue
                 
-                # INSERT Trigger - mit vollständigen Werten
+                # Hole Spaltennamen für die Tabelle
+                columns = self.get_table_columns(table_name)
+                if not columns:
+                    continue
+                
+                column_list = ','.join(columns)
+                
+                # Funktion zum Erstellen von JSON-Objekten als Text
+                # Verwende eine robustere Methode zur JSON-Erzeugung, die keine json_object-Funktion erfordert
+                json_builder = lambda col_prefix: (
+                    f"'{{' || " +
+                    " || ',' || ".join([
+                        f"'\"' || '{col}' || '\":' || CASE WHEN {col_prefix}.{col} IS NULL THEN 'null' " +
+                        f"WHEN typeof({col_prefix}.{col}) IN ('integer', 'real') THEN {col_prefix}.{col} " +
+                        f"ELSE '\"' || replace(replace({col_prefix}.{col}, '\\', '\\\\'), '\"', '\\\"') || '\"' END"
+                        for col in columns
+                    ]) +
+                    " || '}}'"
+                )
+                
+                # INSERT Trigger - mit Erfassung der neuen Werte
                 insert_trigger = f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table_name}_insert AFTER INSERT ON {table_name}
                 BEGIN
                     INSERT INTO _sync_tracking (
                         table_name, 
                         row_id, 
-                        operation, 
+                        operation,
                         changed_columns,
                         old_values,
                         new_values
@@ -242,7 +270,7 @@ class DatabaseManager:
                         'INSERT',
                         '{column_list}',
                         NULL,
-                        json_object({', '.join([f"'{column_name}', NEW.{column_name}" for column_name in columns])})
+                        {json_builder('NEW')}
                     );
                 END;
                 """
@@ -268,8 +296,8 @@ class DatabaseManager:
                         (SELECT json_group_array(column_name) FROM (
                             {' UNION ALL '.join([f"SELECT '{column_name}' as column_name FROM (SELECT 1) WHERE OLD.{column_name} IS NOT NEW.{column_name}" for column_name in columns])}
                         )),
-                        json_object({', '.join([f"'{column_name}', OLD.{column_name}" for column_name in columns])}),
-                        json_object({', '.join([f"'{column_name}', NEW.{column_name}" for column_name in columns])})
+                        {json_builder('OLD')},
+                        {json_builder('NEW')}
                     );
                 END;
                 """
@@ -291,7 +319,7 @@ class DatabaseManager:
                         OLD.rowid, 
                         'DELETE',
                         '{column_list}',
-                        json_object({', '.join([f"'{column_name}', OLD.{column_name}" for column_name in columns])}),
+                        {json_builder('OLD')},
                         NULL
                     );
                 END;
