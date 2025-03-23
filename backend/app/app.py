@@ -146,35 +146,57 @@ def run_app():
     
     if eventlet_available:
         try:
-            # Explizit Socket erstellen und konfigurieren
+            # Explizit Socket erstellen
             sock = None
             try:
                 import socket
                 # Diese Optionen können helfen, das "Address already in use"-Problem zu vermeiden
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                
+                # Versuche zuerst den regulären Socket zu verwenden
                 sock.bind((host, port))
                 sock.listen(128)  # Backlog für verbindende Clients
                 logger.info(f"Socket erfolgreich konfiguriert und gebunden an {host}:{port}")
-            except socket.error as socket_err:
+            except (socket.error, AttributeError) as socket_err:
                 logger.error(f"Socket-Fehler: {socket_err}")
-                raise
+                sock = None
                 
             if sock:
                 # Verwende den explizit erstellten Socket
-                logger.info(f"WSGI-Server-Start mit explizitem Socket und app: {app}")
-                # Debug-Option für zusätzliche Ausgaben
-                eventlet.wsgi.server(sock, app, log_output=True, debug=debug)
+                logger.info(f"WSGI-Server-Start mit explizitem Socket")
+                # Prüfe, ob die debug-Option unterstützt wird
+                try:
+                    eventlet.wsgi.server(sock, app, log_output=True, debug=debug)
+                except TypeError:
+                    # Ältere Versionen unterstützen debug nicht
+                    logger.info("Fallback auf Eventlet wsgi.server ohne debug-Option")
+                    eventlet.wsgi.server(sock, app, log_output=True)
             else:
-                # Fallback, wenn Socket-Erstellung fehlschlug
+                # Fallback auf Eventlet-eigene Socket-Erstellung
                 logger.warning("Fallback auf Eventlet listen()")
-                sock = eventlet.listen((host, port))
-                eventlet.wsgi.server(sock, app, log_output=True)
+                try:
+                    sock = eventlet.listen((host, port))
+                    eventlet.wsgi.server(sock, app, log_output=True)
+                except (TypeError, AttributeError) as e:
+                    logger.error(f"Fehler beim Eventlet listen: {e}")
+                    # Letzter Versuch mit Standard-API
+                    logger.info("Letzter Versuch mit Standard-Eventlet-API")
+                    if hasattr(eventlet, 'serve'):
+                        eventlet.serve(eventlet.listen((host, port)), app)
+                    else:
+                        # Wirklich letzte Möglichkeit
+                        logger.warning("Eventlet API scheint sehr alt zu sein, versuche direkte Socket-Übergabe")
+                        from eventlet import wsgi
+                        wsgi.server(sock, app)
         except Exception as e:
             logger.error(f"Fehler beim Starten des Eventlet-Servers: {e}", exc_info=True)
             # Fallback auf Flask im Fehlerfall
             logger.info(f"Fallback auf Flask-Server auf {host}:{port}")
-            app.run(host=host, port=port, debug=debug, use_reloader=False)
+            try:
+                app.run(host=host, port=port, debug=debug, use_reloader=False)
+            except Exception as run_err:
+                logger.error(f"Fehler beim Starten des Flask-Servers: {run_err}", exc_info=True)
     else:
         logger.info(f"Starte Server mit Flask auf {host}:{port} (Debug: {debug})")
         app.run(host=host, port=port, debug=debug, use_reloader=False)
