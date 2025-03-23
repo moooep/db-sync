@@ -220,13 +220,18 @@ class DatabaseManager:
             CREATE TABLE IF NOT EXISTS _sync_processed_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 change_id INTEGER NOT NULL,
-                processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (change_id) REFERENCES _sync_tracking(id) ON DELETE CASCADE
             )
             ''')
             
-            # Hole alle Tabellen außer den Systemtabellen
-            tables = self.get_all_tables()
+            # Migriere _sync_tracking-Tabelle, wenn sie bereits existiert aber die Spalten fehlen
+            self._migrate_sync_tracking_table(conn)
+            
             system_tables = ['_sync_tracking', '_sync_processed_changes', 'sqlite_sequence', '_db_info']
+            # Hole alle Tabellen, die nicht zu den Systemtabellen gehören
+            all_tables = self.get_all_tables()
+            tables = [table for table in all_tables if table not in system_tables]
             
             for table_name in tables:
                 if table_name.startswith('sqlite_') or table_name in system_tables:
@@ -337,6 +342,86 @@ class DatabaseManager:
                     logger.info(f"Trigger für Tabelle {table_name} erfolgreich erstellt")
                 except sqlite3.Error as e:
                     logger.error(f"Fehler beim Erstellen der Trigger für Tabelle {table_name}: {e}")
+    
+    def _migrate_sync_tracking_table(self, conn: sqlite3.Connection) -> None:
+        """
+        Migriert die _sync_tracking-Tabelle, um sicherzustellen, dass alle erforderlichen Spalten vorhanden sind.
+        """
+        try:
+            cursor = conn.cursor()
+            # Prüfe, ob die Tabelle existiert
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='_sync_tracking'")
+            if not cursor.fetchone():
+                # Tabelle existiert nicht, keine Migration nötig
+                return
+                
+            # Prüfe, welche Spalten vorhanden sind
+            cursor.execute("PRAGMA table_info(_sync_tracking)")
+            columns = cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            # Überprüfe fehlende Spalten und füge sie hinzu
+            missing_columns = []
+            if "changed_columns" not in column_names:
+                missing_columns.append("changed_columns TEXT")
+            if "old_values" not in column_names:
+                missing_columns.append("old_values TEXT")
+            if "new_values" not in column_names:
+                missing_columns.append("new_values TEXT")
+            
+            # Spaltenname könnte variieren (row_id vs record_id)
+            if "row_id" not in column_names and "record_id" in column_names:
+                # Wir müssen die record_id-Spalte in row_id umbenennen
+                # Da SQLite keine direkte RENAME COLUMN unterstützt, müssen wir eine neue Tabelle erstellen
+                # und die Daten migrieren
+                logger.info("Migration von _sync_tracking: record_id wird in row_id umbenannt")
+                cursor.execute('''
+                CREATE TABLE _sync_tracking_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    table_name TEXT NOT NULL,
+                    row_id INTEGER NOT NULL,
+                    operation TEXT NOT NULL,
+                    changed_columns TEXT,
+                    old_values TEXT,
+                    new_values TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    processed INTEGER DEFAULT 0
+                )
+                ''')
+                
+                # Kopiere Daten und benenne record_id in row_id um
+                cursor.execute('''
+                INSERT INTO _sync_tracking_new (id, table_name, row_id, operation, timestamp, processed)
+                SELECT id, table_name, record_id, operation, timestamp, processed FROM _sync_tracking
+                ''')
+                
+                # Lösche alte Tabelle und benenne neue Tabelle um
+                cursor.execute("DROP TABLE _sync_tracking")
+                cursor.execute("ALTER TABLE _sync_tracking_new RENAME TO _sync_tracking")
+                
+                # Neuer Index für die umbenannte Tabelle
+                cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_sync_tracking_timestamp
+                ON _sync_tracking (timestamp)
+                ''')
+                
+                logger.info("Migration von record_id zu row_id erfolgreich abgeschlossen")
+            else:
+                # Füge einzelne fehlende Spalten hinzu
+                for column_def in missing_columns:
+                    column_name = column_def.split()[0]
+                    logger.info(f"Migration von _sync_tracking: Füge {column_name}-Spalte hinzu")
+                    try:
+                        cursor.execute(f"ALTER TABLE _sync_tracking ADD COLUMN {column_def}")
+                        logger.info(f"Migration {column_name} erfolgreich")
+                    except sqlite3.Error as e:
+                        logger.error(f"Fehler beim Hinzufügen der Spalte {column_name}: {e}")
+            
+            conn.commit()
+            logger.info("_sync_tracking Tabellen-Migration abgeschlossen")
+        except sqlite3.Error as e:
+            logger.error(f"Fehler bei der _sync_tracking Migration: {e}")
+            conn.rollback()
     
     def get_changes_since(self, timestamp: str, ignored_tables: List[str] = None) -> List[Dict[str, Any]]:
         """

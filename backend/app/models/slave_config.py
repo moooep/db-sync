@@ -119,6 +119,14 @@ class SlaveConfig:
         Returns:
             int: ID des neuen Slaves
         """
+        # Zuerst überprüfen, ob die Slave-Datenbank alle notwendigen Tabellen und Spalten hat
+        try:
+            self._prepare_slave_database(db_path)
+        except Exception as e:
+            logger.error(f"Fehler bei der Vorbereitung der Slave-Datenbank: {str(e)}")
+            raise ValueError(f"Fehler bei der Vorbereitung der Slave-Datenbank: {str(e)}")
+
+        # Jetzt den Slave zur Konfiguration hinzufügen
         with self.db_manager.get_connection() as conn:
             try:
                 now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -129,9 +137,111 @@ class SlaveConfig:
                     """,
                     (name, db_path, server_address, now, now)
                 )
+                logger.info(f"Slave {name} erfolgreich zur Konfiguration hinzugefügt.")
                 return result.lastrowid
             except Exception as e:
                 raise ValueError(f"Fehler beim Hinzufügen des Slaves: {e}")
+    
+    def _prepare_slave_database(self, db_path: str) -> None:
+        """
+        Bereitet die Slave-Datenbank vor, indem alle notwendigen Tabellen und Spalten erstellt werden.
+        
+        Args:
+            db_path: Pfad zur Slave-Datenbank
+        """
+        from backend.app.core.db_manager import DatabaseManager
+
+        logger.info(f"Bereite Slave-Datenbank vor: {db_path}")
+        
+        # Prüfe, ob die Datenbank existiert
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(f"Slave-Datenbank nicht gefunden: {db_path}")
+        
+        # Stelle eine Verbindung zur Slave-Datenbank her
+        db_manager = DatabaseManager(db_path)
+        
+        # Stelle sicher, dass die _sync_tracking-Tabelle existiert und alle notwendigen Spalten hat
+        with db_manager.get_connection() as conn:
+            try:
+                # Prüfe, ob die _sync_tracking-Tabelle existiert
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='_sync_tracking'")
+                
+                if cursor.fetchone():
+                    # Tabelle existiert, prüfe die Spalten
+                    cursor.execute("PRAGMA table_info(_sync_tracking)")
+                    columns = cursor.fetchall()
+                    column_names = [col[1] for col in columns]
+                    
+                    # Füge fehlende Spalten hinzu
+                    if "changed_columns" not in column_names:
+                        logger.info("Füge changed_columns-Spalte zur _sync_tracking-Tabelle hinzu")
+                        cursor.execute("ALTER TABLE _sync_tracking ADD COLUMN changed_columns TEXT")
+                    
+                    if "old_values" not in column_names:
+                        logger.info("Füge old_values-Spalte zur _sync_tracking-Tabelle hinzu")
+                        cursor.execute("ALTER TABLE _sync_tracking ADD COLUMN old_values TEXT")
+                    
+                    if "new_values" not in column_names:
+                        logger.info("Füge new_values-Spalte zur _sync_tracking-Tabelle hinzu")
+                        cursor.execute("ALTER TABLE _sync_tracking ADD COLUMN new_values TEXT")
+                    
+                    # Überprüfe, ob row_id oder record_id verwendet wird
+                    if "row_id" not in column_names and "record_id" in column_names:
+                        logger.info("record_id wird in row_id umbenannt")
+                        # Erstelle neue Tabelle mit korrekter Struktur
+                        cursor.execute('''
+                        CREATE TABLE _sync_tracking_new (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            table_name TEXT NOT NULL,
+                            row_id INTEGER NOT NULL,
+                            operation TEXT NOT NULL,
+                            changed_columns TEXT,
+                            old_values TEXT,
+                            new_values TEXT,
+                            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            processed INTEGER DEFAULT 0
+                        )
+                        ''')
+                        
+                        # Kopiere Daten
+                        cursor.execute('''
+                        INSERT INTO _sync_tracking_new (id, table_name, row_id, operation, timestamp, processed)
+                        SELECT id, table_name, record_id, operation, timestamp, processed FROM _sync_tracking
+                        ''')
+                        
+                        # Lösche alte Tabelle und benenne neue um
+                        cursor.execute("DROP TABLE _sync_tracking")
+                        cursor.execute("ALTER TABLE _sync_tracking_new RENAME TO _sync_tracking")
+                else:
+                    # Tabelle existiert nicht, erstelle sie mit vollständiger Struktur
+                    logger.info("Erstelle _sync_tracking-Tabelle in der Slave-Datenbank")
+                    cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS _sync_tracking (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        table_name TEXT NOT NULL,
+                        row_id INTEGER NOT NULL,
+                        operation TEXT NOT NULL,
+                        changed_columns TEXT,
+                        old_values TEXT,
+                        new_values TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        processed INTEGER DEFAULT 0
+                    )
+                    ''')
+                
+                # Erstelle oder aktualisiere den Index
+                cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_sync_tracking_timestamp
+                ON _sync_tracking (timestamp)
+                ''')
+                
+                conn.commit()
+                logger.info("Slave-Datenbank erfolgreich vorbereitet.")
+            except sqlite3.Error as e:
+                conn.rollback()
+                logger.error(f"Fehler bei der Vorbereitung der Slave-Datenbank: {e}")
+                raise ValueError(f"Fehler bei der Vorbereitung der Slave-Datenbank: {e}")
     
     def update_slave(self, slave_id: int, name: Optional[str] = None, 
                     db_path: Optional[str] = None, server_address: Optional[str] = None, 
