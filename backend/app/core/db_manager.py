@@ -175,13 +175,16 @@ class DatabaseManager:
         Richtet das Change-Tracking-System in der Datenbank ein.
         Erstellt eine Tabelle zur Verfolgung von Änderungen und Trigger für INSERT, UPDATE, DELETE.
         """
-        # Erstelle Change-Tracking-Tabelle
+        # Erstelle Change-Tracking-Tabelle mit erweitertem Schema
         tracking_table_schema = """
         CREATE TABLE IF NOT EXISTS _sync_tracking (
             id INTEGER PRIMARY KEY,
             table_name TEXT NOT NULL,
             row_id INTEGER NOT NULL,
             operation TEXT NOT NULL,
+            changed_columns TEXT,
+            old_values TEXT,
+            new_values TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -191,41 +194,99 @@ class DatabaseManager:
             
             # Hole alle Tabellen außer System- und Tracking-Tabellen
             tables = self.get_all_tables()
-            tables = [t for t in tables if not t.startswith('sqlite_') and t != '_sync_tracking']
+            tables = [t for t in tables if not t.startswith('sqlite_') and not t.startswith('_sync')]
             
             # Erstelle Trigger für jede Tabelle
             for table_name in tables:
-                # INSERT Trigger
+                # Hole Spalten für diese Tabelle
+                columns = self.get_table_columns(table_name)
+                column_list = ", ".join(columns)
+                
+                # INSERT Trigger - mit vollständigen Werten
                 insert_trigger = f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table_name}_insert AFTER INSERT ON {table_name}
                 BEGIN
-                    INSERT INTO _sync_tracking (table_name, row_id, operation) 
-                    VALUES ('{table_name}', NEW.rowid, 'INSERT');
+                    INSERT INTO _sync_tracking (
+                        table_name, 
+                        row_id, 
+                        operation, 
+                        changed_columns,
+                        old_values,
+                        new_values
+                    ) 
+                    VALUES (
+                        '{table_name}', 
+                        NEW.rowid, 
+                        'INSERT',
+                        '{column_list}',
+                        NULL,
+                        json_object({', '.join([f"'{column_name}', NEW.{column_name}" for column_name in columns])})
+                    );
                 END;
                 """
                 
-                # UPDATE Trigger
+                # UPDATE Trigger - mit Erfassung der alten und neuen Werte
+                # Nur triggern, wenn sich tatsächlich etwas geändert hat
                 update_trigger = f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table_name}_update AFTER UPDATE ON {table_name}
+                WHEN {' OR '.join([f"OLD.{column_name} IS NOT NEW.{column_name}" for column_name in columns])}
                 BEGIN
-                    INSERT INTO _sync_tracking (table_name, row_id, operation) 
-                    VALUES ('{table_name}', NEW.rowid, 'UPDATE');
+                    INSERT INTO _sync_tracking (
+                        table_name, 
+                        row_id, 
+                        operation,
+                        changed_columns,
+                        old_values,
+                        new_values
+                    ) 
+                    VALUES (
+                        '{table_name}', 
+                        NEW.rowid, 
+                        'UPDATE',
+                        (SELECT json_group_array(column_name) FROM (
+                            {' UNION ALL '.join([f"SELECT '{column_name}' as column_name FROM (SELECT 1) WHERE OLD.{column_name} IS NOT NEW.{column_name}" for column_name in columns])}
+                        )),
+                        json_object({', '.join([f"'{column_name}', OLD.{column_name}" for column_name in columns])}),
+                        json_object({', '.join([f"'{column_name}', NEW.{column_name}" for column_name in columns])})
+                    );
                 END;
                 """
                 
-                # DELETE Trigger
+                # DELETE Trigger - speichert die alten Werte
                 delete_trigger = f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table_name}_delete AFTER DELETE ON {table_name}
                 BEGIN
-                    INSERT INTO _sync_tracking (table_name, row_id, operation) 
-                    VALUES ('{table_name}', OLD.rowid, 'DELETE');
+                    INSERT INTO _sync_tracking (
+                        table_name, 
+                        row_id, 
+                        operation,
+                        changed_columns,
+                        old_values,
+                        new_values
+                    ) 
+                    VALUES (
+                        '{table_name}', 
+                        OLD.rowid, 
+                        'DELETE',
+                        '{column_list}',
+                        json_object({', '.join([f"'{column_name}', OLD.{column_name}" for column_name in columns])}),
+                        NULL
+                    );
                 END;
                 """
                 
                 # Führe Trigger-Erstellung aus
-                conn.execute(insert_trigger)
-                conn.execute(update_trigger)
-                conn.execute(delete_trigger)
+                try:
+                    conn.execute(f"DROP TRIGGER IF EXISTS trg_{table_name}_insert")
+                    conn.execute(f"DROP TRIGGER IF EXISTS trg_{table_name}_update")
+                    conn.execute(f"DROP TRIGGER IF EXISTS trg_{table_name}_delete")
+                    
+                    conn.execute(insert_trigger)
+                    conn.execute(update_trigger)
+                    conn.execute(delete_trigger)
+                    logger.info(f"Trigger für Tabelle {table_name} erfolgreich erstellt")
+                except sqlite3.Error as e:
+                    logger.error(f"Fehler beim Erstellen der Trigger für Tabelle {table_name}: {e}")
     
     def get_changes_since(self, timestamp: str, ignored_tables: List[str] = None) -> List[Dict[str, Any]]:
         """
@@ -244,55 +305,26 @@ class DatabaseManager:
         placeholder = ','.join(['?'] * len(ignored_tables))
         ignore_clause = f"AND table_name NOT IN ({placeholder})" if ignored_tables else ""
         
-        # Zeitzonensicherer Vergleich - SQLite speichert in UTC, konvertiere zur Sicherheit
-        # Füge eine kleine Zeitpuffer hinzu (30 Sekunden), um sicherzustellen, dass keine Änderungen verpasst werden
+        # Zeitzonensicherer Vergleich
         buffer_time = "30 seconds"
         
         query = f"""
-        SELECT id, table_name, row_id, operation, timestamp 
-        FROM _sync_tracking 
-        WHERE datetime(timestamp) > datetime(?, '-{buffer_time}') {ignore_clause}
+        SELECT * FROM _sync_tracking 
+        WHERE datetime(timestamp) > datetime(?, '-{buffer_time}')
+        {ignore_clause}
         ORDER BY timestamp ASC
         """
         
-        logger.debug(f"Suche Änderungen seit {timestamp} (mit {buffer_time} Puffer)")
+        params = (timestamp,) + tuple(ignored_tables)
         
         with self.get_connection() as conn:
-            params = [timestamp] + ignored_tables if ignored_tables else [timestamp]
-            result = conn.execute(query, params).fetchall()
-            
-            # Entferne Duplikate (behalte nur die neueste Änderung pro Zeile)
-            row_operations = {}
-            for change in result:
-                key = (change["table_name"], change["row_id"])
-                # Wenn der Eintrag neu ist oder neuer als der bisherige
-                if key not in row_operations or change["timestamp"] > row_operations[key]["timestamp"]:
-                    row_operations[key] = change
-            
-            # Konvertiere zurück zur Liste und entferne DELETE-Operationen, 
-            # wenn die Zeile später wieder eingefügt wurde
-            filtered_changes = []
-            for key, change in row_operations.items():
-                # Wenn eine DELETE-Operation ist, prüfe ob es später wieder eingefügt wurde
-                if change["operation"] == "DELETE":
-                    table_name, row_id = key
-                    # Prüfe mit direkter Abfrage, ob die Zeile existiert
-                    row_exists = False
-                    try:
-                        row_exists_query = f"SELECT 1 FROM {table_name} WHERE rowid = ? LIMIT 1"
-                        row_check = conn.execute(row_exists_query, (row_id,)).fetchone()
-                        row_exists = row_check is not None
-                    except sqlite3.Error:
-                        # Tabelle existiert möglicherweise nicht mehr
-                        pass
-                    
-                    if not row_exists:
-                        filtered_changes.append(change)
-                else:
-                    filtered_changes.append(change)
-            
-            logger.debug(f"Gefunden: {len(result)} Änderungen, nach Filterung: {len(filtered_changes)}")
-            return filtered_changes
+            try:
+                result = conn.execute(query, params).fetchall()
+                logger.info(f"Gefundene Änderungen seit {timestamp}: {len(result)}")
+                return result
+            except sqlite3.Error as e:
+                logger.error(f"Fehler beim Abrufen der Änderungen: {e}")
+                return []
     
     def backup_database(self, backup_path: str) -> None:
         """
@@ -314,4 +346,63 @@ class DatabaseManager:
             raise
         finally:
             source.close()
-            destination.close() 
+            destination.close()
+    
+    def get_unprocessed_changes(self, conn, limit=100):
+        """
+        Holt unverarbeitete Änderungen aus der Tracking-Tabelle.
+        
+        Args:
+            conn: Datenbankverbindung
+            limit: Maximale Anzahl von Änderungen
+            
+        Returns:
+            List[Dict]: Liste von Änderungen
+        """
+        # Prüfe, ob die Tabelle existiert, und erstelle sie, falls nicht
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS _sync_processed_changes (
+            id INTEGER PRIMARY KEY,
+            change_id INTEGER NOT NULL,
+            processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Abfrage für unverarbeitete Änderungen
+        query = '''
+        SELECT id, table_name, row_id as record_id, operation, timestamp
+        FROM _sync_tracking
+        WHERE id NOT IN (SELECT change_id FROM _sync_processed_changes)
+        ORDER BY id ASC
+        LIMIT ?
+        '''
+        
+        result = conn.execute(query, (limit,)).fetchall()
+        return result
+    
+    def mark_changes_as_processed(self, conn, change_ids):
+        """
+        Markiert Änderungen als verarbeitet.
+        
+        Args:
+            conn: Datenbankverbindung
+            change_ids: Liste von Änderungs-IDs
+        """
+        if not change_ids:
+            return
+        
+        # Erstelle die Tabelle, falls sie nicht existiert
+        conn.execute('''
+        CREATE TABLE IF NOT EXISTS _sync_processed_changes (
+            id INTEGER PRIMARY KEY,
+            change_id INTEGER NOT NULL,
+            processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Füge die verarbeiteten Änderungen hinzu
+        for change_id in change_ids:
+            conn.execute(
+                "INSERT INTO _sync_processed_changes (change_id) VALUES (?)",
+                (change_id,)
+            ) 

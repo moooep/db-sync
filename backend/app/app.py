@@ -101,17 +101,17 @@ def create_app(test_config=None):
     
     return app
 
-def run_app():
-    """Startet die Anwendung."""
-    app = create_app()
-    socketio = app.socketio
+def run_app(config_path=None, host="0.0.0.0", port=5002, debug=False):
+    """Flask-Anwendung ausführen."""
+    app = create_app(config_path)
     
-    # Starte den Synchronisations-Thread, falls SyncService initialisiert wurde
+    # Starte Synchronisations-Thread, wenn vorhanden
     if hasattr(app, 'sync_service'):
         app.sync_service.start_sync_thread()
+        app.sync_service.start_realtime_sync()
+        logger.info("Echtzeit-Synchronisation aktiviert")
     
-    # Starte den Entwicklungsserver
-    socketio.run(app, host=WEB_HOST, port=WEB_PORT, debug=DEBUG)
+    app.run(host=host, port=port, debug=debug)
 
 if __name__ == '__main__':
     run_app() 

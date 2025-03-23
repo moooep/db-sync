@@ -228,16 +228,27 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Tabellen laden
     function loadAvailableTables() {
+        console.log('Debug: loadAvailableTables in main.js wird ausgeführt');
         const tablesContainer = document.getElementById('availableTablesContainer');
         const tablesList = document.getElementById('availableTables');
+        
+        if (!tablesContainer || !tablesList) {
+            console.error('Debug: Container-Elemente für Tabellen nicht gefunden!');
+            return;
+        }
         
         loadTablesBtn.disabled = true;
         loadTablesBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Lade...';
         
         fetch('/api/tables')
-            .then(response => response.json())
+            .then(response => {
+                console.log('Debug: API Response Status:', response.status);
+                return response.json();
+            })
             .then(data => {
-                if (data.tables && data.tables.length > 0) {
+                console.log('Debug: Erhaltene Tabellendaten:', data);
+                
+                if (data.tables && Array.isArray(data.tables) && data.tables.length > 0) {
                     let html = '';
                     data.tables.forEach(table => {
                         html += `
@@ -256,14 +267,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     document.querySelectorAll('.table-checkbox').forEach(checkbox => {
                         checkbox.addEventListener('change', updateIgnoredTablesInput);
                     });
+                    
+                    console.log('Debug: Tabellen erfolgreich angezeigt, Anzahl:', data.tables.length);
+                } else if (data.status === 'error') {
+                    console.error('Debug: API-Fehler beim Laden der Tabellen:', data.message);
+                    tablesList.innerHTML = `<p class="text-danger">Fehler: ${data.message || 'Unbekannter Fehler beim Laden der Tabellen.'}</p>`;
+                    tablesContainer.classList.remove('d-none');
                 } else {
+                    console.log('Debug: Keine Tabellen in der Antwort gefunden');
                     tablesList.innerHTML = '<p>Keine Tabellen gefunden.</p>';
                     tablesContainer.classList.remove('d-none');
                 }
             })
             .catch(error => {
-                console.error('Fehler beim Laden der Tabellen:', error);
-                tablesList.innerHTML = '<p class="text-danger">Fehler beim Laden der Tabellen.</p>';
+                console.error('Debug: Fetch-Fehler beim Laden der Tabellen:', error);
+                tablesList.innerHTML = `<p class="text-danger">Fehler beim Laden der Tabellen: ${error.message}</p>`;
                 tablesContainer.classList.remove('d-none');
             })
             .finally(() => {
@@ -372,4 +390,176 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialen Ladeprozess starten
     loadDashboard();
+
+    // Funktionen für die Echtzeit-Synchronisation
+    function getRealtimeSyncStatus() {
+        fetch('/api/realtime-sync/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    const statusElement = document.getElementById('realtime-sync-status');
+                    const queueElement = document.getElementById('realtime-sync-queue');
+                    
+                    if (statusElement) {
+                        statusElement.innerHTML = data.realtime_sync_active ? 
+                            '<span class="badge bg-success">Aktiv</span>' : 
+                            '<span class="badge bg-danger">Inaktiv</span>';
+                    }
+                    
+                    if (queueElement) {
+                        queueElement.textContent = data.queue_size;
+                    }
+                    
+                    // Aktualisiere die Schaltflächen
+                    toggleRealtimeSyncButtons(data.realtime_sync_active);
+                }
+            })
+            .catch(error => console.error('Fehler beim Abrufen des Echtzeit-Synchronisationsstatus:', error));
+    }
+
+    function startRealtimeSync() {
+        fetch('/api/realtime-sync/start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('Echtzeit-Synchronisation gestartet', 'success');
+                getRealtimeSyncStatus();
+            } else {
+                showNotification('Fehler: ' + data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Fehler beim Starten der Echtzeit-Synchronisation:', error);
+            showNotification('Fehler beim Starten der Echtzeit-Synchronisation', 'danger');
+        });
+    }
+
+    function stopRealtimeSync() {
+        fetch('/api/realtime-sync/stop', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('Echtzeit-Synchronisation gestoppt', 'success');
+                getRealtimeSyncStatus();
+            } else {
+                showNotification('Fehler: ' + data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Fehler beim Stoppen der Echtzeit-Synchronisation:', error);
+            showNotification('Fehler beim Stoppen der Echtzeit-Synchronisation', 'danger');
+        });
+    }
+
+    function toggleRealtimeSyncButtons(isActive) {
+        const startButton = document.getElementById('start-realtime-sync');
+        const stopButton = document.getElementById('stop-realtime-sync');
+        
+        if (startButton && stopButton) {
+            startButton.disabled = isActive;
+            stopButton.disabled = !isActive;
+        }
+    }
+
+    // Initialisiere die Echtzeit-Synchronisationssteuerung auf der Hauptseite
+    function initRealtimeSyncControls() {
+        // Originale Implementierung für die bekannten IDs
+        const startButton = document.getElementById('start-realtime-sync');
+        const stopButton = document.getElementById('stop-realtime-sync');
+        
+        if (startButton) {
+            startButton.addEventListener('click', startRealtimeSync);
+        }
+        
+        if (stopButton) {
+            stopButton.addEventListener('click', stopRealtimeSync);
+        }
+        
+        // Zusätzliche Implementierung für Buttons mit Text "Starten" und "Stoppen"
+        document.querySelectorAll('button').forEach(button => {
+            const buttonText = button.textContent.trim();
+            if (buttonText === 'Starten') {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    console.log('Start-Button geklickt (Text-basiert)');
+                    startRealtimeSync();
+                });
+            } else if (buttonText.includes('Starten')) {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    console.log('Start-Button geklickt (enthält "Starten")');
+                    startRealtimeSync();
+                });
+            } else if (buttonText === 'Stoppen') {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    console.log('Stop-Button geklickt (Text-basiert)');
+                    stopRealtimeSync();
+                });
+            } else if (buttonText.includes('Stoppen')) {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    console.log('Stop-Button geklickt (enthält "Stoppen")');
+                    stopRealtimeSync();
+                });
+            }
+        });
+        
+        // Rufe den Status beim Laden der Seite ab
+        getRealtimeSyncStatus();
+        
+        // Aktualisiere den Status regelmäßig (alle 5 Sekunden)
+        setInterval(getRealtimeSyncStatus, 5000);
+    }
+    
+    // Initialisiere die Bedienelemente
+    initRealtimeSyncControls();
+    
+    // Modal zum Hinzufügen eines neuen Slaves
+    const addSlaveForm = document.getElementById('addSlaveForm');
+    if (addSlaveForm) {
+        addSlaveForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(addSlaveForm);
+            const slaveData = {
+                name: formData.get('slaveName'),
+                db_path: formData.get('slavePath'),
+                server: formData.get('slaveServer') || null
+            };
+            
+            fetch('/api/slaves', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(slaveData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showNotification('Slave erfolgreich hinzugefügt', 'success');
+                    addSlaveForm.reset();
+                    bootstrap.Modal.getInstance(document.getElementById('addSlaveModal')).hide();
+                    loadSlaves();
+                } else {
+                    showNotification('Fehler beim Hinzufügen des Slaves: ' + data.message, 'danger');
+                }
+            })
+            .catch(error => {
+                console.error('Fehler beim Hinzufügen des Slaves:', error);
+                showNotification('Fehler beim Hinzufügen des Slaves', 'danger');
+            });
+        });
+    }
 }); 

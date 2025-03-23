@@ -9,7 +9,9 @@ import logging
 import sqlite3
 import subprocess
 import random
-from typing import Dict, List, Optional, Any
+import queue
+import json
+from typing import Dict, List, Optional, Any, Set
 from datetime import datetime
 
 from backend.app.core.db_manager import DatabaseManager
@@ -24,7 +26,8 @@ logger = logging.getLogger(__name__)
 class SyncService:
     """
     Dienst zur Verwaltung der Synchronisation von Slave-Datenbanken.
-    Implementiert einen Hintergrundprozess für regelmäßige Synchronisationen.
+    Implementiert einen Hintergrundprozess für regelmäßige Synchronisationen
+    sowie eine Echtzeit-Änderungserkennung und -übertragung.
     """
     
     def __init__(self, master_db_path: str = MASTER_DB_PATH, sync_interval: int = SYNC_INTERVAL):
@@ -39,8 +42,16 @@ class SyncService:
         self.sync_interval = sync_interval
         self.slave_config = SlaveConfig()
         self.sync_thread = None
+        self.realtime_thread = None
         self.stop_event = threading.Event()
         self.sync_engines = {}  # Cache für SyncEngine-Instanzen
+        
+        # Queue für Änderungen mit Batch-Verarbeitung
+        self.change_queue = queue.Queue()
+        self.slave_connections = {}  # Persistente Verbindungen zu Slaves
+        self.processing_batches = set()  # Set von Slave-IDs, die gerade verarbeitet werden
+        self.processing_lock = threading.Lock()  # Lock für das processing_batches Set
+        self.slave_workers = {}  # Worker-Threads für die Slave-Synchronisation
         
         # Überprüfe, ob die Master-Datenbank existiert
         if not os.path.exists(self.master_db_path):
@@ -48,6 +59,380 @@ class SyncService:
         
         # Erstelle das Temp-Verzeichnis, falls es nicht existiert
         os.makedirs(TEMP_DIR, exist_ok=True)
+        
+        # Richte Change-Tracking in der Master-Datenbank ein
+        self._setup_master_tracking()
+        
+        # Echtzeit-Synchronisation
+        self.realtime_active = False
+        
+    def _setup_master_tracking(self) -> None:
+        """Richtet das Change-Tracking-System in der Master-Datenbank ein."""
+        try:
+            master_db = DatabaseManager(self.master_db_path)
+            master_db.setup_change_tracking()
+            logger.info("Change-Tracking in der Master-Datenbank erfolgreich eingerichtet")
+        except Exception as e:
+            logger.error(f"Fehler beim Einrichten des Change-Trackings: {e}", exc_info=True)
+    
+    def _get_slave_connection(self, slave_id: int) -> Optional[sqlite3.Connection]:
+        """
+        Gibt eine persistente Verbindung zu einem Slave zurück oder erstellt eine neue.
+        
+        Args:
+            slave_id: ID des Slaves
+            
+        Returns:
+            Optional[sqlite3.Connection]: Die Verbindung oder None bei Fehler
+        """
+        if slave_id in self.slave_connections and self.slave_connections[slave_id]['conn'] is not None:
+            # Überprüfe, ob die Verbindung noch aktiv ist
+            try:
+                self.slave_connections[slave_id]['conn'].execute("SELECT 1")
+                self.slave_connections[slave_id]['last_used'] = time.time()
+                return self.slave_connections[slave_id]['conn']
+            except sqlite3.Error:
+                # Verbindung ist fehlerhaft, schließe sie
+                self._close_slave_connection(slave_id)
+        
+        # Erstelle neue Verbindung
+        try:
+            slave = self.slave_config.get_slave(slave_id)
+            if not slave:
+                logger.error(f"Slave mit ID {slave_id} nicht gefunden")
+                return None
+            
+            conn = sqlite3.connect(slave["db_path"])
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.row_factory = sqlite3.Row
+            
+            self.slave_connections[slave_id] = {
+                'conn': conn,
+                'db_path': slave["db_path"],
+                'last_used': time.time()
+            }
+            
+            logger.info(f"Neue Verbindung zu Slave {slave_id} hergestellt")
+            return conn
+        except sqlite3.Error as e:
+            logger.error(f"Fehler beim Herstellen der Verbindung zu Slave {slave_id}: {e}")
+            return None
+    
+    def _close_slave_connection(self, slave_id: int) -> None:
+        """
+        Schließt eine Verbindung zu einem Slave.
+        
+        Args:
+            slave_id: ID des Slaves
+        """
+        if slave_id in self.slave_connections and self.slave_connections[slave_id]['conn'] is not None:
+            try:
+                self.slave_connections[slave_id]['conn'].close()
+                logger.info(f"Verbindung zu Slave {slave_id} geschlossen")
+            except sqlite3.Error as e:
+                logger.error(f"Fehler beim Schließen der Verbindung zu Slave {slave_id}: {e}")
+            finally:
+                self.slave_connections[slave_id]['conn'] = None
+                
+    def _close_all_slave_connections(self) -> None:
+        """Schließt alle Verbindungen zu Slaves."""
+        for slave_id in list(self.slave_connections.keys()):
+            self._close_slave_connection(slave_id)
+    
+    def _clean_old_connections(self, max_idle_time: int = 300) -> None:
+        """
+        Schließt inaktive Verbindungen.
+        
+        Args:
+            max_idle_time: Maximale Inaktivitätszeit in Sekunden
+        """
+        current_time = time.time()
+        for slave_id in list(self.slave_connections.keys()):
+            if (self.slave_connections[slave_id]['conn'] is not None and 
+                current_time - self.slave_connections[slave_id]['last_used'] > max_idle_time):
+                logger.info(f"Schließe inaktive Verbindung zu Slave {slave_id}")
+                self._close_slave_connection(slave_id)
+    
+    def start_realtime_sync(self) -> bool:
+        """Startet die Echtzeit-Synchronisation."""
+        if self.realtime_thread and self.realtime_thread.is_alive():
+            logger.info("Echtzeit-Synchronisationsthread läuft bereits")
+            return False
+        
+        self.stop_event.clear()
+        
+        try:
+            # Setze die Tracking-Tabelle in der Master-Datenbank auf
+            # Statt self._get_slave_connection(0) verwenden wir direkt die Master-Datenbank
+            master_db = DatabaseManager(self.master_db_path)
+            master_db.setup_change_tracking()
+            
+            # Starte den Hauptthread für die Echtzeit-Synchronisation
+            self.realtime_thread = threading.Thread(
+                target=self._realtime_sync_thread,
+                daemon=True
+            )
+            self.realtime_thread.start()
+            
+            self.realtime_active = True
+            logger.info("Echtzeit-Synchronisationsthread gestartet")
+            return True
+        except Exception as e:
+            logger.error(f"Fehler beim Starten der Echtzeit-Synchronisation: {e}")
+            return False
+    
+    def stop_realtime_sync(self) -> bool:
+        """Stoppt die Echtzeit-Synchronisation."""
+        if not self.realtime_thread or not self.realtime_thread.is_alive():
+            logger.info("Kein laufender Echtzeit-Synchronisationsthread zum Stoppen")
+            return False
+        
+        try:
+            self.stop_event.set()
+            
+            # Warten auf das Ende des Threads (mit Timeout)
+            self.realtime_thread.join(timeout=5.0)
+            
+            # Leere die Warteschlange
+            while not self.change_queue.empty():
+                try:
+                    self.change_queue.get_nowait()
+                    self.change_queue.task_done()
+                except queue.Empty:
+                    break
+            
+            # Stoppe alle Worker-Threads
+            for slave_id, worker in self.slave_workers.items():
+                if worker and worker.is_alive():
+                    worker.join(timeout=3.0)
+            
+            self.slave_workers.clear()
+            self.realtime_active = False
+            logger.info("Echtzeit-Synchronisationsthread gestoppt")
+            return True
+        except Exception as e:
+            logger.error(f"Fehler beim Stoppen der Echtzeit-Synchronisation: {e}")
+            return False
+    
+    def get_realtime_status(self):
+        """Gibt den Status der Echtzeit-Synchronisation zurück."""
+        is_active = self.realtime_thread is not None and self.realtime_thread.is_alive()
+        return {
+            "active": is_active,
+            "queue_size": self.change_queue.qsize() if is_active else 0
+        }
+    
+    def _realtime_sync_thread(self):
+        """Hauptthread für die Echtzeit-Synchronisation."""
+        logger.info("Echtzeit-Synchronisationsthread gestartet")
+        
+        # Menge zur Nachverfolgung der aktiven Slave-IDs
+        active_slaves = set()
+        
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    # Aktualisiere die Liste der aktiven Slaves
+                    slaves = self.slave_config.get_all_slaves()
+                    current_slave_ids = {slave["id"] for slave in slaves}
+                    
+                    # Starte Worker-Threads für neue Slaves
+                    for slave_id in current_slave_ids:
+                        if slave_id not in active_slaves:
+                            self._start_slave_worker(slave_id)
+                            active_slaves.add(slave_id)
+                    
+                    # Entferne Worker-Threads für gelöschte Slaves
+                    slaves_to_remove = active_slaves - current_slave_ids
+                    for slave_id in slaves_to_remove:
+                        if slave_id in self.slave_workers:
+                            self.slave_workers[slave_id].join(timeout=1.0)
+                            del self.slave_workers[slave_id]
+                        active_slaves.remove(slave_id)
+                    
+                    # Hole unverarbeitete Änderungen aus der Master-Datenbank
+                    # Direkter Zugriff auf die Master-Datenbank
+                    master_db = DatabaseManager(self.master_db_path)
+                    with master_db.get_connection() as master_conn:
+                        # Verwende die Methoden des DatabaseManager
+                        changes = master_db.get_unprocessed_changes(master_conn, limit=100)
+                        
+                        if changes:
+                            logger.debug(f"Gefundene Änderungen: {len(changes)}")
+                            
+                            # Gruppiere Änderungen nach Tabelle und Operation
+                            change_batch = self._group_changes(changes)
+                            
+                            # Lege den Batch in die Warteschlange für alle Slaves
+                            for slave_id in active_slaves:
+                                self.change_queue.put((slave_id, change_batch))
+                            
+                            # Markiere Änderungen als verarbeitet
+                            change_ids = [change['id'] for change in changes]
+                            master_db.mark_changes_as_processed(master_conn, change_ids)
+                        
+                        # master_conn wird automatisch durch den Context Manager geschlossen
+                        
+                        # Kurze Pause, um CPU-Last zu reduzieren
+                        time.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.error(f"Fehler im Echtzeit-Synchronisationsthread: {e}")
+                    time.sleep(5)  # Längere Pause nach Fehler
+        
+        finally:
+            logger.info("Echtzeit-Synchronisationsthread beendet")
+    
+    def _start_slave_worker(self, slave_id):
+        """Startet einen Worker-Thread für einen Slave."""
+        if slave_id in self.slave_workers and self.slave_workers[slave_id].is_alive():
+            return
+        
+        worker = threading.Thread(
+            target=self._slave_sync_worker,
+            args=(slave_id,),
+            daemon=True
+        )
+        worker.start()
+        self.slave_workers[slave_id] = worker
+        logger.debug(f"Worker-Thread für Slave {slave_id} gestartet")
+    
+    def _slave_sync_worker(self, slave_id):
+        """Worker-Thread für die Synchronisation eines Slaves."""
+        logger.debug(f"Worker-Thread für Slave {slave_id} läuft")
+        
+        while not self.stop_event.is_set():
+            try:
+                # Hole einen Change-Batch aus der Warteschlange mit Timeout
+                try:
+                    target_slave_id, change_batch = self.change_queue.get(timeout=1.0)
+                    
+                    # Überspringen, wenn der Batch nicht für diesen Slave bestimmt ist
+                    if target_slave_id != slave_id:
+                        self.change_queue.task_done()
+                        continue
+                    
+                    # Verarbeite den Batch
+                    slave = self.slave_config.get_slave(slave_id)
+                    if slave and slave.is_online:
+                        self._process_change_batch(slave, change_batch)
+                    
+                    self.change_queue.task_done()
+                    
+                except queue.Empty:
+                    # Keine Änderungen in der Warteschlange, weiter zur nächsten Iteration
+                    continue
+                
+            except Exception as e:
+                logger.error(f"Fehler im Worker-Thread für Slave {slave_id}: {e}")
+                time.sleep(2)  # Kurze Pause nach Fehler
+    
+    def _group_changes(self, changes):
+        """Gruppiert Änderungen nach Tabelle und Operation."""
+        result = {}
+        
+        for change in changes:
+            table = change['table_name']
+            operation = change['operation']
+            record_id = change['record_id']
+            
+            if table not in result:
+                result[table] = {'INSERT': [], 'UPDATE': [], 'DELETE': []}
+            
+            # Füge nur eindeutige Record-IDs hinzu
+            if record_id not in result[table][operation]:
+                result[table][operation].append(record_id)
+        
+        return result
+    
+    def _process_change_batch(self, slave, change_batch):
+        """Verarbeitet einen Batch von Änderungen für einen Slave."""
+        start_time = time.time()
+        
+        try:
+            # Direkter Zugriff auf die Master-Datenbank
+            master_db = DatabaseManager(self.master_db_path)
+            with master_db.get_connection() as master_conn:
+                slave_conn = sqlite3.connect(slave["db_path"])
+                slave_conn.row_factory = sqlite3.Row
+                
+                # Prüfe, ob Master- und Slave-Datenbank kompatibel sind
+                if not self._get_sync_engine(slave["id"]).verify_schema_compatibility():
+                    logger.error(f"Schema-Inkompatibilität zwischen Master und Slave {slave['id']}")
+                    return
+                
+                # Beginne Transaktion
+                slave_conn.execute("BEGIN TRANSACTION")
+                
+                try:
+                    for table, operations in change_batch.items():
+                        # Verarbeite DELETE-Operationen
+                        for record_id in operations['DELETE']:
+                            slave_conn.execute(f"DELETE FROM {table} WHERE id = ?", (record_id,))
+                        
+                        # Verarbeite INSERT und UPDATE-Operationen
+                        for operation in ['INSERT', 'UPDATE']:
+                            for record_id in operations[operation]:
+                                # Hole den Datensatz aus der Master-Datenbank
+                                record = self.slave_config.get_record_by_id(master_conn, table, record_id)
+                                
+                                if record:
+                                    if operation == 'INSERT':
+                                        # Prüfe, ob der Datensatz bereits existiert
+                                        cursor = slave_conn.execute(f"SELECT COUNT(*) FROM {table} WHERE id = ?", (record_id,))
+                                        exists = cursor.fetchone()[0] > 0
+                                        
+                                        if exists:
+                                            # Datensatz existiert bereits, führe UPDATE durch
+                                            columns = ', '.join([f"{key} = ?" for key in record.keys() if key != 'id'])
+                                            values = [record[key] for key in record.keys() if key != 'id']
+                                            values.append(record_id)
+                                            
+                                            slave_conn.execute(f"UPDATE {table} SET {columns} WHERE id = ?", values)
+                                        else:
+                                            # INSERT
+                                            columns = ', '.join(record.keys())
+                                            placeholders = ', '.join(['?'] * len(record))
+                                            values = list(record.values())
+                                            
+                                            slave_conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", values)
+                                    else:
+                                        # UPDATE
+                                        columns = ', '.join([f"{key} = ?" for key in record.keys() if key != 'id'])
+                                        values = [record[key] for key in record.keys() if key != 'id']
+                                        values.append(record_id)
+                                        
+                                        slave_conn.execute(f"UPDATE {table} SET {columns} WHERE id = ?", values)
+                    
+                    # Aktualisiere den Synchronisationszeitstempel
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    slave_conn.execute(
+                        "UPDATE _sync_config SET last_sync_timestamp = ? WHERE id = 1",
+                        (now,)
+                    )
+                    
+                    # Commit der Transaktion
+                    slave_conn.commit()
+                    
+                    duration = time.time() - start_time
+                    logger.info(f"Echtzeit-Synchronisation für Slave {slave['id']} abgeschlossen (Dauer: {duration:.3f}s)")
+                    
+                except Exception as e:
+                    # Rollback bei Fehler
+                    slave_conn.rollback()
+                    logger.error(f"Fehler bei der Echtzeit-Synchronisation für Slave {slave['id']}: {e}")
+                    raise
+                
+                finally:
+                    # Schließe die Slave-Verbindung
+                    if 'slave_conn' in locals() and slave_conn:
+                        slave_conn.close()
+            
+            # master_conn wird automatisch durch den Context Manager geschlossen
+            
+        except Exception as e:
+            logger.error(f"Fehler bei der Verbindung zur Datenbank für Slave {slave['id']}: {e}")
     
     def _get_sync_engine(self, slave_id: int) -> Optional[SyncEngine]:
         """

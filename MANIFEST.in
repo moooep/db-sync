@@ -1,0 +1,14 @@
+include config-sample.ini
+include README.md
+include LICENSE
+
+recursive-include frontend/static *
+recursive-include frontend/templates *
+
+recursive-include data .gitkeep
+recursive-include logs .gitkeep
+
+exclude *.db
+exclude config.ini
+exclude data/*.db
+exclude logs/*.log 

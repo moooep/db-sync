@@ -408,3 +408,85 @@ def get_settings() -> Dict[str, Any]:
         "web_host": WEB_HOST,
         "web_port": WEB_PORT
     })
+
+# Echtzeit-Synchronisation steuern
+@api_bp.route('/realtime-sync/start', methods=['POST'])
+def start_realtime_sync():
+    """Startet die Echtzeit-Synchronisation."""
+    try:
+        # Debug-Ausgabe für weitere Informationen
+        current_app.logger.debug("API: start_realtime_sync aufgerufen")
+        
+        # Prüfe, ob die Echtzeit-Synchronisation bereits läuft
+        status = current_app.sync_service.get_realtime_status()
+        if status['active']:
+            current_app.logger.debug("API: Echtzeit-Synchronisation läuft bereits")
+            return jsonify({
+                'status': 'success',
+                'message': 'Echtzeit-Synchronisation läuft bereits'
+            })
+        
+        # Der Wert von result ist True, wenn die Synchronisation erfolgreich gestartet wurde
+        result = current_app.sync_service.start_realtime_sync()
+        current_app.logger.debug(f"API: start_realtime_sync lieferte Ergebnis: {result}")
+        
+        # Die Methode gibt True zurück, wenn der Thread gestartet wurde
+        # Die Fehlermeldung "Slave mit ID 0 nicht gefunden" ist nicht kritisch, da wir
+        # die Methode angepasst haben, um direkt auf die Master-Datenbank zuzugreifen
+        if result:
+            current_app.logger.debug("API: Echtzeit-Synchronisation erfolgreich gestartet")
+            return jsonify({
+                'status': 'success',
+                'message': 'Echtzeit-Synchronisation gestartet'
+            })
+        else:
+            current_app.logger.debug("API: Echtzeit-Synchronisation konnte nicht gestartet werden")
+            return jsonify({
+                'status': 'error',
+                'message': 'Echtzeit-Synchronisation konnte nicht gestartet werden'
+            })
+    except Exception as e:
+        current_app.logger.error(f"Fehler beim Starten der Echtzeit-Synchronisation: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        })
+
+@api_bp.route('/realtime-sync/stop', methods=['POST'])
+def stop_realtime_sync():
+    """Stoppt die Echtzeit-Synchronisation."""
+    try:
+        result = current_app.sync_service.stop_realtime_sync()
+        if result:
+            return jsonify({
+                'status': 'success',
+                'message': 'Echtzeit-Synchronisation gestoppt'
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Echtzeit-Synchronisation konnte nicht gestoppt werden'
+            })
+    except Exception as e:
+        current_app.logger.error(f"Fehler beim Stoppen der Echtzeit-Synchronisation: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        })
+
+@api_bp.route('/realtime-sync/status', methods=['GET'])
+def get_realtime_sync_status():
+    """Gibt den Status der Echtzeit-Synchronisation zurück."""
+    try:
+        status = current_app.sync_service.get_realtime_status()
+        return jsonify({
+            'status': 'success',
+            'realtime_sync_active': status['active'],
+            'queue_size': status['queue_size']
+        })
+    except Exception as e:
+        current_app.logger.error(f"Fehler beim Abrufen des Echtzeit-Synchronisationsstatus: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        })
