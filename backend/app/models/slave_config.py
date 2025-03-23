@@ -85,9 +85,12 @@ class SlaveConfig:
             try:
                 # Prüfe, ob die last_sync-Spalte in der slaves-Tabelle existiert
                 cursor = conn.cursor()
+                # Deaktiviere die Row-Factory temporär für diesen Cursor
+                cursor.row_factory = None
+                
                 cursor.execute("PRAGMA table_info(slaves)")
                 columns = cursor.fetchall()
-                column_names = [col[1] for col in columns]
+                column_names = [col[1] for col in columns]  # col ist jetzt ein Tuple, kein Dict
                 
                 # Wenn last_sync nicht existiert, füge sie hinzu
                 if "last_sync" not in column_names:
@@ -165,13 +168,16 @@ class SlaveConfig:
             try:
                 # Prüfe, ob die _sync_tracking-Tabelle existiert
                 cursor = conn.cursor()
+                # Deaktiviere die Row-Factory temporär für diesen Cursor
+                cursor.row_factory = None
+                
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='_sync_tracking'")
                 
                 if cursor.fetchone():
                     # Tabelle existiert, prüfe die Spalten
                     cursor.execute("PRAGMA table_info(_sync_tracking)")
                     columns = cursor.fetchall()
-                    column_names = [col[1] for col in columns]
+                    column_names = [col[1] for col in columns]  # col ist jetzt ein Tuple, kein Dict
                     
                     # Füge fehlende Spalten hinzu
                     if "changed_columns" not in column_names:
@@ -381,9 +387,12 @@ class SlaveConfig:
             # Prüfe, ob die last_sync-Spalte existiert
             with sqlite3.connect(self.db_manager.db_path) as conn:
                 cursor = conn.cursor()
+                # Deaktiviere die Row-Factory temporär für diesen Cursor
+                cursor.row_factory = None
+                
                 cursor.execute("PRAGMA table_info(slaves)")
                 columns = cursor.fetchall()
-                column_names = [col[1] for col in columns]
+                column_names = [col[1] for col in columns]  # col ist jetzt ein Tuple, kein Dict
                 has_last_sync = "last_sync" in column_names
             
             # SQL-Befehl je nach Status und Vorhandensein der last_sync-Spalte

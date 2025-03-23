@@ -543,4 +543,26 @@ class DatabaseManager:
             conn.execute(
                 "INSERT INTO _sync_processed_changes (change_id) VALUES (?)",
                 (change_id,)
-            ) 
+            )
+    
+    def execute_sql(self, sql: str, params: list = None) -> bool:
+        """
+        Führt ein SQL-Statement aus.
+        
+        Args:
+            sql: SQL-Statement
+            params: Parameter für das SQL-Statement
+            
+        Returns:
+            bool: True bei Erfolg, False bei Fehler
+        """
+        if params is None:
+            params = []
+            
+        try:
+            with self.get_connection() as conn:
+                conn.execute(sql, params)
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Fehler beim Ausführen des SQL-Statements: {e}")
+            return False 
