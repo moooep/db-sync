@@ -114,7 +114,13 @@ def run_app():
     try:
         import eventlet
         eventlet_available = True
-        logger.info("Eventlet wurde bereits geladen und gepacht")
+        logger.info("Eventlet wurde geladen und ist verfügbar")
+        # Prüfe auf socket-monkey_patch
+        if hasattr(eventlet, 'monkey_patch') and hasattr(eventlet, 'is_monkey_patched'):
+            logger.info(f"Socket monkey-patched: {eventlet.is_monkey_patched('socket')}")
+            logger.info(f"Thread monkey-patched: {eventlet.is_monkey_patched('thread')}")
+        else:
+            logger.warning("Eventlet ist geladen, aber monkey_patch-Funktionen konnten nicht verifiziert werden")
     except ImportError:
         logger.warning("Eventlet nicht installiert oder nicht verfügbar")
 
@@ -136,9 +142,22 @@ def run_app():
     port = int(os.environ.get('FLASK_PORT', WEB_PORT))
     debug = os.environ.get('FLASK_DEBUG', str(DEBUG)).lower() == 'true'
     
+    logger.info(f"Starte Server auf {host}:{port} (Debug: {debug})")
+    
     if eventlet_available:
-        logger.info(f"Starte Server mit Eventlet auf {host}:{port} (Debug: {debug})")
-        eventlet.wsgi.server(eventlet.listen((host, port)), app)
+        try:
+            # Verwende bind_socket - stabiler als listen
+            logger.info(f"Erstelle Socket auf {host}:{port}")
+            sock = eventlet.listen((host, port))
+            logger.info(f"Socket erstellt, starte wsgi-Server")
+            # Mehr Logs vor dem Start
+            logger.info(f"WSGI-Server-Start mit app: {app}")
+            eventlet.wsgi.server(sock, app, log_output=True)
+        except Exception as e:
+            logger.error(f"Fehler beim Starten des Eventlet-Servers: {e}", exc_info=True)
+            # Fallback auf Flask im Fehlerfall
+            logger.info(f"Fallback auf Flask-Server auf {host}:{port}")
+            app.run(host=host, port=port, debug=debug, use_reloader=False)
     else:
         logger.info(f"Starte Server mit Flask auf {host}:{port} (Debug: {debug})")
         app.run(host=host, port=port, debug=debug, use_reloader=False)
