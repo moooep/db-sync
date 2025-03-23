@@ -5,14 +5,13 @@ Modell für die Konfiguration von Slave-Datenbanken.
 import os
 import json
 import sqlite3
-import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+import logging
 
 from backend.app.core.db_manager import DatabaseManager
 from backend.config.config import MASTER_DB_PATH
 
-# Logger einrichten
 logger = logging.getLogger(__name__)
 
 class SlaveConfig:
@@ -20,25 +19,14 @@ class SlaveConfig:
     Klasse zur Verwaltung der Konfiguration von Slave-Datenbanken.
     """
     
-    def __init__(self, config_db_path: Optional[str] = None):
+    def __init__(self, config_db_path: str = MASTER_DB_PATH):
         """
         Initialisiert die SlaveConfig-Klasse.
         
         Args:
             config_db_path: Pfad zur Konfigurations-Datenbank
         """
-        if config_db_path is None:
-            # Standard-Konfigurationspfad ist im selben Verzeichnis wie die Master-DB
-            master_dir = os.path.dirname(MASTER_DB_PATH)
-            self.config_db_path = os.path.join(master_dir, 'config.db')
-        else:
-            self.config_db_path = config_db_path
-            
-        # Stelle sicher, dass das Verzeichnis existiert
-        os.makedirs(os.path.dirname(self.config_db_path), exist_ok=True)
-        
-        # Verbindung zur Datenbank
-        self.db_manager = DatabaseManager(self.config_db_path)
+        self.db_manager = DatabaseManager(config_db_path)
         self._create_config_tables()
     
     def _create_config_tables(self) -> None:
@@ -86,6 +74,38 @@ class SlaveConfig:
         self.db_manager.create_table_if_not_exists("slaves", slaves_schema)
         self.db_manager.create_table_if_not_exists("ignored_tables", ignored_tables_schema)
         self.db_manager.create_table_if_not_exists("sync_logs", sync_logs_schema)
+        
+        # Führe Datenbankmigrationen durch, um vorhandene Tabellen zu aktualisieren
+        self._run_migrations()
+    
+    def _run_migrations(self):
+        """Führt Datenbankmigrationen durch, um sicherzustellen, dass ältere Datenbanken 
+        alle erforderlichen Spalten haben."""
+        with sqlite3.connect(self.db_manager.db_path) as conn:
+            try:
+                # Prüfe, ob die last_sync-Spalte in der slaves-Tabelle existiert
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(slaves)")
+                columns = cursor.fetchall()
+                column_names = [col[1] for col in columns]
+                
+                # Wenn last_sync nicht existiert, füge sie hinzu
+                if "last_sync" not in column_names:
+                    logger.info("Migriere slaves-Tabelle: Füge last_sync-Spalte hinzu")
+                    cursor.execute("ALTER TABLE slaves ADD COLUMN last_sync DATETIME")
+                    conn.commit()
+                    logger.info("Migration last_sync erfolgreich")
+                
+                # Wenn ignored_tables nicht existiert, füge sie hinzu
+                if "ignored_tables" not in column_names:
+                    logger.info("Migriere slaves-Tabelle: Füge ignored_tables-Spalte hinzu")
+                    cursor.execute("ALTER TABLE slaves ADD COLUMN ignored_tables TEXT")
+                    conn.commit()
+                    logger.info("Migration ignored_tables erfolgreich")
+                    
+            except sqlite3.Error as e:
+                logger.error(f"Fehler bei der Datenbankmigrationen: {e}")
+                # Nicht raising, um die Anwendung weiterlaufen zu lassen, auch wenn Migration fehlschlägt
     
     def add_slave(self, name: str, db_path: str, server_address: Optional[str] = None) -> int:
         """
@@ -236,47 +256,71 @@ class SlaveConfig:
             
             return slaves
     
-    def update_slave_sync_status(self, slave_id: int, status: str, 
-                                last_sync: Optional[str] = None) -> bool:
+    def update_slave_sync_status(self, slave_id: int, status: str = None) -> bool:
         """
         Aktualisiert den Synchronisationsstatus eines Slaves.
         
         Args:
-            slave_id: ID des Slaves
-            status: Neuer Status
-            last_sync: Zeitstempel der letzten Synchronisation (optional)
+            slave_id: Die ID des Slaves
+            status: Der neue Status ('success', 'error', 'running', None)
             
         Returns:
-            bool: True bei Erfolg, False sonst
+            bool: True, wenn der Update erfolgreich war, sonst False
         """
-        updates = ["status = ?", "updated_at = ?"]
-        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        params = [status, current_time]
-        
-        # Wenn ein Zeitstempel für die letzte Synchronisation angegeben wurde,
-        # verwenden wir diesen, ansonsten den aktuellen Zeitstempel
-        if last_sync is not None:
-            updates.append("last_sync = ?")
-            params.append(last_sync)
-            print(f"update_slave_sync_status: Verwende angegebenen Zeitstempel: {last_sync}")
-        else:
-            # Nur aktualisieren, wenn Status auf 'active' oder 'syncing' gesetzt wird
-            if status in ['active', 'syncing']:
-                updates.append("last_sync = ?")
-                params.append(current_time)
-                print(f"update_slave_sync_status: Verwende aktuellen Zeitstempel: {current_time}")
-        
-        params.append(slave_id)
-        
-        sql = f"UPDATE slaves SET {', '.join(updates)} WHERE id = ?"
-        print(f"update_slave_sync_status: SQL: {sql}, Params: {params}")
-        
-        with self.db_manager.get_connection() as conn:
-            try:
-                conn.execute(sql, params)
+        try:
+            # Prüfe, ob die last_sync-Spalte existiert
+            with sqlite3.connect(self.db_manager.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(slaves)")
+                columns = cursor.fetchall()
+                column_names = [col[1] for col in columns]
+                has_last_sync = "last_sync" in column_names
+            
+            # SQL-Befehl je nach Status und Vorhandensein der last_sync-Spalte
+            if status:
+                # Wenn ein Status übergeben wurde, aktualisiere den Status
+                update_sql = "UPDATE slaves SET status = ?, updated_at = CURRENT_TIMESTAMP"
+                params = [status]
+                
+                # Wenn last_sync existiert und Status erfolgreich ist, aktualisiere auch last_sync
+                if has_last_sync and status == "success":
+                    update_sql += ", last_sync = CURRENT_TIMESTAMP"
+                
+                update_sql += " WHERE id = ?"
+                params.append(slave_id)
+            else:
+                # Wenn kein Status übergeben wurde, nur last_sync aktualisieren
+                if has_last_sync:
+                    update_sql = "UPDATE slaves SET last_sync = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    params = [slave_id]
+                else:
+                    # Wenn last_sync nicht existiert, aktualisiere nur updated_at
+                    update_sql = "UPDATE slaves SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    params = [slave_id]
+                    logger.warning(f"last_sync-Spalte fehlt in der slaves-Tabelle für Slave {slave_id}")
+            
+            # Führe das SQL-Statement aus
+            result = self.db_manager.execute_sql(update_sql, params)
+            
+            if result:
+                logger.info(f"Synchronisationsstatus für Slave {slave_id} aktualisiert: {status if status else 'nur Zeitstempel'}")
                 return True
-            except Exception as e:
-                raise ValueError(f"Fehler beim Aktualisieren des Sync-Status: {e}")
+            else:
+                logger.error(f"Fehler beim Aktualisieren des Synchronisationsstatus für Slave {slave_id}")
+                return False
+        except Exception as e:
+            logger.error(f"Fehler beim Aktualisieren des Synchronisationsstatus: {str(e)}")
+            # Versuche eine Migration, falls der Fehler durch fehlende Spalte verursacht wurde
+            if "no such column: last_sync" in str(e):
+                logger.info("Versuche Migration durchzuführen...")
+                try:
+                    self._run_migrations()
+                    logger.info("Migration erfolgreich, versuche erneut...")
+                    # Versuche erneut mit Rekursion, jedoch nur einmal
+                    return self.update_slave_sync_status(slave_id, status)
+                except Exception as e2:
+                    logger.error(f"Migration fehlgeschlagen: {str(e2)}")
+            return False
     
     def add_ignored_table(self, slave_id: int, table_name: str) -> bool:
         """
